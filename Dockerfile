@@ -4,6 +4,8 @@ FROM ruby:3.2.0-slim
 RUN apt-get update -qq && apt-get install -y \
   wireguard \
   wireguard-tools \
+  iproute2 \
+  iptables \
   build-essential \
   curl \
   git \
