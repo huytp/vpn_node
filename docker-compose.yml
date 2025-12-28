@@ -1,0 +1,32 @@
+version: '3.8'
+
+services:
+  vpn-node-1:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: vpn-node-1
+    restart: unless-stopped
+    command: [ "ruby", "node-agent/bin/node-agent" ]
+    environment:
+      - NODE_ADDRESS=${NODE_ADDRESS}
+      - PRIVATE_KEY_PATH=${PRIVATE_KEY_PATH}
+      - BACKEND_URL=${BACKEND_URL}
+      - HEARTBEAT_INTERVAL=${HEARTBEAT_INTERVAL:-30}
+      - TRAFFIC_REPORT_INTERVAL=${TRAFFIC_REPORT_INTERVAL:-60}
+      - WG_INTERFACE=${WG_INTERFACE:-wg0}
+      - WG_CONFIG_PATH=${WG_CONFIG_PATH:-/etc/wireguard/wg0.conf}
+      - RPC_URL=${RPC_URL:-}
+      - REWARD_CONTRACT_ADDRESS=${REWARD_CONTRACT_ADDRESS:-}
+      - CONTRACT_ABI_PATH=${CONTRACT_ABI_PATH:-}
+    volumes:
+      - ./keys:/app/keys:ro
+      - /etc/wireguard:/etc/wireguard:ro
+    network_mode: host
+    cap_add:
+      - NET_ADMIN
+      - SYS_MODULE
+    devices:
+      - /dev/net/tun
+    env_file:
+      - .env

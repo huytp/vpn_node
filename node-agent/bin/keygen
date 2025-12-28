@@ -1,0 +1,26 @@
+#!/usr/bin/env ruby
+
+require_relative '../lib/signer'
+require 'optparse'
+
+options = { path: './keys/node.key' }
+
+OptionParser.new do |opts|
+  opts.banner = "Usage: keygen [options]"
+
+  opts.on('-p', '--path PATH', 'Path to save private key') do |path|
+    options[:path] = path
+  end
+end.parse!
+
+begin
+  address = VPNNode::Signer.generate_key(options[:path])
+  puts "Private key generated and saved to: #{options[:path]}"
+  puts "Node address: #{address}"
+  puts "\nSet NODE_ADDRESS environment variable:"
+  puts "  export NODE_ADDRESS=#{address}"
+rescue => e
+  puts "Error: #{e.message}"
+  exit 1
+end
+

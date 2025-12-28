@@ -1,0 +1,15 @@
+.git
+.gitignore
+README.md
+.env
+*.log
+keys/*
+!keys/.gitkeep
+node_modules
+.DS_Store
+*.swp
+*.swo
+*~
+.vscode
+.idea
+

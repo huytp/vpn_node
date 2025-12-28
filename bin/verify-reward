@@ -1,0 +1,47 @@
+#!/bin/bash
+
+# Helper script để chạy verify-reward trong Docker container
+# Usage: ./bin/verify-reward -e EPOCH_ID [CONTAINER_NAME]
+
+CONTAINER_NAME="vpn-node-1"
+EPOCH_ID=""
+
+# Parse arguments
+while [[ $# -gt 0 ]]; do
+  case $1 in
+    -e|--epoch)
+      EPOCH_ID="$2"
+      shift 2
+      ;;
+    *)
+      # Nếu không phải flag, coi như container name
+      if [ -z "$EPOCH_ID" ]; then
+        echo "Error: Epoch ID is required. Use -e or --epoch flag"
+        exit 1
+      else
+        CONTAINER_NAME="$1"
+        shift
+      fi
+      ;;
+  esac
+done
+
+if [ -z "$EPOCH_ID" ]; then
+  echo "Error: Epoch ID is required"
+  echo "Usage: ./bin/verify-reward -e EPOCH_ID [CONTAINER_NAME]"
+  echo "Example: ./bin/verify-reward -e 123"
+  echo "Example: ./bin/verify-reward -e 123 vpn-node-2"
+  exit 1
+fi
+
+# Check if container is running
+if ! docker ps --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
+  echo "Error: Container '${CONTAINER_NAME}' is not running"
+  echo "Available containers:"
+  docker ps --format '{{.Names}}' | grep vpn-node || echo "  (none)"
+  exit 1
+fi
+
+# Run verify-reward in container
+docker exec "${CONTAINER_NAME}" ruby node-agent/bin/verify-reward -e "${EPOCH_ID}"
+

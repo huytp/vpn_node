@@ -1,0 +1,66 @@
+#!/usr/bin/env ruby
+
+require_relative '../lib/vpn_node'
+require 'optparse'
+
+options = { epoch: nil }
+
+OptionParser.new do |opts|
+  opts.banner = "Usage: claim-reward [options]"
+
+  opts.on('-e', '--epoch EPOCH', 'Epoch ID to claim') do |epoch|
+    options[:epoch] = epoch.to_i
+  end
+end.parse!
+
+begin
+  config = VPNNode::Config.new
+  config.validate!
+
+  signer = VPNNode::Signer.new(config.private_key_path)
+
+  unless ENV['RPC_URL'] && ENV['REWARD_CONTRACT_ADDRESS']
+    puts "❌ Error: RPC_URL and REWARD_CONTRACT_ADDRESS must be set"
+    exit 1
+  end
+
+  claimer = VPNNode::RewardClaimer.new(
+    signer,
+    config.backend_url,
+    ENV['RPC_URL'],
+    ENV['REWARD_CONTRACT_ADDRESS'],
+    ENV['CONTRACT_ABI_PATH'],
+    ENV['TATUM_API_KEY']
+  )
+
+  if options[:epoch]
+    # Claim specific epoch
+    claimer.claim_reward(options[:epoch])
+  else
+    # Claim all pending rewards
+    puts "Checking for pending rewards..."
+    pending = claimer.get_pending_rewards
+
+    if pending.empty?
+      puts "No pending rewards found"
+    else
+      puts "Found #{pending.length} pending reward(s):"
+      pending.each do |reward|
+        puts "  Epoch #{reward[:epoch]}: #{reward[:amount]} DEVPN"
+      end
+
+      print "\nClaim all? (y/n): "
+      if gets.chomp.downcase == 'y'
+        pending.each do |reward|
+          claimer.claim_reward(reward[:epoch])
+          sleep 5
+        end
+      end
+    end
+  end
+rescue => e
+  puts "Error: #{e.message}"
+  puts e.backtrace.first(5)
+  exit 1
+end
+

@@ -1,0 +1,35 @@
+#!/usr/bin/env ruby
+
+require_relative '../lib/vpn_node'
+require 'optparse'
+
+options = { epoch: nil }
+
+OptionParser.new do |opts|
+  opts.banner = "Usage: verify-reward [options]"
+
+  opts.on('-e', '--epoch EPOCH', 'Epoch ID to verify') do |epoch|
+    options[:epoch] = epoch.to_i
+  end
+end.parse!
+
+if options[:epoch].nil?
+  puts "Error: Epoch ID is required"
+  puts "Usage: verify-reward -e EPOCH_ID"
+  exit 1
+end
+
+begin
+  config = VPNNode::Config.new
+  config.validate!
+
+  signer = VPNNode::Signer.new(config.private_key_path)
+  verifier = VPNNode::RewardVerifier.new(signer, config.backend_url)
+
+  verifier.verify_reward(options[:epoch])
+rescue => e
+  puts "Error: #{e.message}"
+  puts e.backtrace.first(5)
+  exit 1
+end
+

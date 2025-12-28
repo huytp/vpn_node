@@ -1,0 +1,10 @@
+#!/usr/bin/env ruby
+
+# Force unbuffered output for Docker logging
+$stdout.sync = true
+$stderr.sync = true
+
+require_relative '../lib/agent'
+
+VPNNode::Agent.new.run
+
