@@ -17,6 +17,8 @@ RUN apt-get update -qq && apt-get install -y \
   autoconf \
   automake \
   libtool \
+  nano \
+  vim \
   && rm -rf /var/lib/apt/lists/*
 
 # Pre-install libsecp256k1 to avoid download issues during gem install
