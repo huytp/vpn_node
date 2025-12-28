@@ -85,6 +85,14 @@ module VPNNode
       # Đảm bảo WireGuard config file được tạo khi agent khởi động
       config_path = @config.wg_config_path
 
+      # Đảm bảo config_path luôn là /etc/wireguard/wg0.conf
+      unless config_path == '/etc/wireguard/wg0.conf'
+        puts "⚠️  Warning: WG_CONFIG_PATH is set to #{config_path}, but should be /etc/wireguard/wg0.conf"
+        puts "   Using /etc/wireguard/wg0.conf instead"
+        config_path = '/etc/wireguard/wg0.conf'
+        @config.wg_config_path = config_path
+      end
+
       unless File.exist?(config_path)
         puts "📝 WireGuard config file not found, creating initial config..."
         begin
@@ -111,15 +119,23 @@ module VPNNode
 
           File.write(config_path, config_content)
           File.chmod(0600, config_path)
-          puts "✅ WireGuard config created at #{config_path}"
-          puts "   Public Key: #{public_key}"
+
+          # Verify file was written
+          if File.exist?(config_path)
+            puts "✅ WireGuard config successfully created at #{config_path}"
+            puts "   Public Key: #{public_key}"
+          else
+            puts "❌ Error: Config file was not created at #{config_path}"
+          end
         rescue Errno::EACCES => e
-          puts "⚠️  Permission denied creating WireGuard config: #{e.message}"
+          puts "❌ Permission denied creating WireGuard config: #{e.message}"
           puts "   Please run with sudo or ensure write access to #{File.dirname(config_path)}"
           puts "   Or create the config file manually at: #{config_path}"
+          raise
         rescue => e
-          puts "⚠️  Failed to create WireGuard config: #{e.message}"
+          puts "❌ Failed to create WireGuard config: #{e.message}"
           puts "   You may need to create it manually at: #{config_path}"
+          raise
         end
       else
         puts "✅ WireGuard config file exists at #{config_path}"
