@@ -14,19 +14,20 @@ module VPNNode
       @signer = agent.instance_variable_get(:@signer)
     end
 
-    # GET /api/info - Lấy thông tin node (public key, endpoint)
+    # GET /api/info - Lấy thông tin node (public key, private key, endpoint)
     get '/api/info' do
       content_type :json
 
       begin
-        # Lấy WireGuard public key từ config file hoặc generate
-        wg_public_key = get_wireguard_public_key
+        # Lấy WireGuard keys từ config file hoặc generate
+        wg_private_key, wg_public_key = get_wireguard_keys
         wg_listen_port = get_wireguard_listen_port
         wg_endpoint = get_wireguard_endpoint
 
         {
           node_address: @signer.address,
           wireguard: {
+            private_key: wg_private_key,
             public_key: wg_public_key,
             listen_port: wg_listen_port,
             endpoint: wg_endpoint
@@ -97,28 +98,56 @@ module VPNNode
 
     private
 
-    def get_wireguard_public_key
+    def get_wireguard_keys
       # Đọc từ WireGuard config file
       config_path = @config.wg_config_path
 
       if File.exist?(config_path)
-        # Parse config để lấy public key (cần private key để derive public key)
-        private_key = `grep "^PrivateKey" #{config_path} | cut -d'=' -f2 | tr -d ' '`.strip
+        # Parse config để lấy private key - đọc trực tiếp từ file để tránh shell injection
+        config_content = File.read(config_path)
+        private_key_match = config_content.match(/^PrivateKey\s*=\s*(.+)$/m)
 
-        unless private_key.empty?
-          return `echo "#{private_key}" | wg pubkey`.strip
+        if private_key_match
+          # Loại bỏ tất cả whitespace, newline, và carriage return
+          private_key = private_key_match[1].gsub(/[\s\n\r]/, '').strip
+
+          # Validate key format (base64, ~44 characters)
+          if private_key.length >= 40 && private_key.length <= 50 && private_key.match?(/^[A-Za-z0-9+\/]+=*$/)
+            # Generate public key từ private key - sử dụng printf để tránh shell interpretation
+            public_key_result = `printf '%s' "#{private_key}" | wg pubkey 2>&1`.strip
+
+            if $?.success? && !public_key_result.empty? && !public_key_result.include?('error') && !public_key_result.include?('Key is not')
+              return [private_key, public_key_result]
+            else
+              puts "⚠️  Failed to generate public key from private key: #{public_key_result}"
+            end
+          else
+            puts "⚠️  Invalid private key format in config file (length: #{private_key.length}, format: #{private_key.match?(/^[A-Za-z0-9+\/]+=*$/).inspect})"
+          end
         end
       end
 
       # Nếu không có config, generate key pair mới
       private_key, public_key = WireGuard.generate_key_pair
 
-      # Tạo config file nếu chưa có
+      # Tạo config file nếu chưa có (không reload ngay, sẽ reload khi cần)
       unless File.exist?(config_path)
-        create_initial_wireguard_config(private_key)
+        create_initial_wireguard_config(private_key, skip_reload: true)
       end
 
+      [private_key, public_key]
+    end
+
+    def get_wireguard_public_key
+      # Wrapper để tương thích với code cũ
+      _, public_key = get_wireguard_keys
       public_key
+    end
+
+    def get_wireguard_private_key
+      # Lấy private key
+      private_key, _ = get_wireguard_keys
+      private_key
     end
 
     def get_wireguard_listen_port
@@ -163,7 +192,7 @@ module VPNNode
       `hostname -I | awk '{print $1}'`.strip
     end
 
-    def create_initial_wireguard_config(private_key)
+    def create_initial_wireguard_config(private_key, skip_reload: false)
       config_path = @config.wg_config_path
       config_dir = File.dirname(config_path)
 
@@ -180,7 +209,13 @@ module VPNNode
         ListenPort = #{get_wireguard_listen_port}
       CONFIG
 
-      File.write(config_path, config_content, mode: '0600')
+      File.write(config_path, config_content)
+      File.chmod(0600, config_path)
+
+      # Chỉ reload nếu interface đã tồn tại và không skip
+      unless skip_reload
+        reload_wireguard_config
+      end
     end
 
     def add_wireguard_peer(peer_public_key, allowed_ips, connection_id)
@@ -208,10 +243,16 @@ module VPNNode
       FileUtils.cp(config_path, "#{config_path}.backup") if File.exist?(config_path)
 
       # Ghi config mới
-      File.write(config_path, new_config, mode: '0600')
+      File.write(config_path, new_config)
+      File.chmod(0600, config_path)
 
-      # Reload WireGuard config
-      reload_wireguard_config
+      # Reload WireGuard config (chỉ khi interface đã up)
+      begin
+        reload_wireguard_config
+      rescue => e
+        puts "⚠️  Warning: Failed to reload WireGuard config: #{e.message}"
+        # Không fail toàn bộ operation nếu chỉ reload thất bại
+      end
 
       { success: true }
     rescue => e
@@ -254,10 +295,16 @@ module VPNNode
 
       # Backup và ghi config mới
       FileUtils.cp(config_path, "#{config_path}.backup") if File.exist?(config_path)
-      File.write(config_path, new_lines.join, mode: '0600')
+      File.write(config_path, new_lines.join)
+      File.chmod(0600, config_path)
 
-      # Reload WireGuard config
-      reload_wireguard_config
+      # Reload WireGuard config (chỉ khi interface đã up)
+      begin
+        reload_wireguard_config
+      rescue => e
+        puts "⚠️  Warning: Failed to reload WireGuard config: #{e.message}"
+        # Không fail toàn bộ operation nếu chỉ reload thất bại
+      end
 
       { success: true }
     rescue => e
@@ -269,17 +316,56 @@ module VPNNode
       interface = @config.wg_interface
       config_path = @config.wg_config_path
 
-      # Sử dụng wg syncconf để reload config không cần down/up interface
-      stripped_config = `wg-quick strip #{config_path} 2>/dev/null`.strip
-      unless stripped_config.empty?
-        IO.popen("wg syncconf #{interface} -", 'w') do |io|
-          io.write(stripped_config)
+      return unless File.exist?(config_path)
+
+      # Kiểm tra xem interface đã up chưa
+      interface_exists = `ip link show #{interface} 2>/dev/null`.strip
+
+      if interface_exists.empty?
+        # Interface chưa tồn tại, cần up interface
+        puts "Interface #{interface} not found, bringing it up..."
+        result = system("wg-quick up #{config_path} >/dev/null 2>&1")
+        unless result
+          error_output = `wg-quick up #{config_path} 2>&1`
+          puts "⚠️  Failed to bring up WireGuard interface: #{error_output.strip}"
+          return false
+        end
+        return true
+      else
+        # Interface đã tồn tại, chỉ reload config
+        # Validate config trước khi reload bằng cách strip
+        stripped_output = `wg-quick strip #{config_path} 2>&1`
+
+        unless $?.success?
+          puts "⚠️  WireGuard config validation failed: #{stripped_output.strip}"
+          puts "   Config file may have invalid keys or format"
+          return false
+        end
+
+        if stripped_output.strip.empty?
+          puts "⚠️  WireGuard config is empty after stripping"
+          return false
+        end
+
+        # Config hợp lệ, reload
+        reload_result = IO.popen("wg syncconf #{interface} - 2>&1", 'w') do |io|
+          io.write(stripped_output)
           io.close_write
         end
+
+        unless $?.success?
+          error_output = `wg syncconf #{interface} - 2>&1 < /dev/null`
+          puts "⚠️  Failed to reload WireGuard config: #{error_output.strip}"
+          return false
+        end
+
+        return true
       end
     rescue => e
       Rails.logger.error("Failed to reload WireGuard config: #{e.message}") if defined?(Rails)
-      puts "Failed to reload WireGuard config: #{e.message}"
+      puts "⚠️  Failed to reload WireGuard config: #{e.message}"
+      puts e.backtrace.first(3) if defined?(Rails)
+      false
     end
   end
 end

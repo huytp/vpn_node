@@ -38,7 +38,8 @@ module VPNNode
 
       def save(path)
         FileUtils.mkdir_p(File.dirname(path))
-        File.write(path, to_s, mode: '0600')
+        File.write(path, to_s)
+        File.chmod(0600, path)
       end
     end
 

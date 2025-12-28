@@ -23,7 +23,7 @@ module VPNNode
 
       @traffic_meter = TrafficMeter.new(@signer)
       @traffic_sender = TrafficSender.new(@signer, @config.backend_url, @traffic_meter)
-      @heartbeat_sender = HeartbeatSender.new(@signer, @config.backend_url)
+      @heartbeat_sender = HeartbeatSender.new(@signer, @config.backend_url, @config)
       @wg_previous_stats = {} # Lưu stats trước đó để tính delta
 
       # Initialize reward claimer if blockchain config available
@@ -48,6 +48,9 @@ module VPNNode
 
     def run
       puts "Starting VPN Node Agent for address: #{@signer.address}"
+
+      # Khởi tạo WireGuard config nếu chưa có
+      initialize_wireguard_config
 
       @running = true
 
@@ -78,11 +81,60 @@ module VPNNode
 
     private
 
+    def initialize_wireguard_config
+      # Đảm bảo WireGuard config file được tạo khi agent khởi động
+      config_path = @config.wg_config_path
+
+      unless File.exist?(config_path)
+        puts "📝 WireGuard config file not found, creating initial config..."
+        begin
+          require_relative 'wireguard'
+
+          # Generate key pair
+          private_key, public_key = WireGuard.generate_key_pair
+
+          # Tạo config file
+          config_dir = File.dirname(config_path)
+          FileUtils.mkdir_p(config_dir)
+
+          # Generate address (10.0.0.x/24)
+          node_index = @signer.address[-2..-1].to_i(16) % 254 + 1
+          address = "10.0.0.#{node_index}/24"
+          listen_port = ENV['WG_LISTEN_PORT'] || 51820
+
+          config_content = <<~CONFIG
+            [Interface]
+            PrivateKey = #{private_key}
+            Address = #{address}
+            ListenPort = #{listen_port}
+          CONFIG
+
+          File.write(config_path, config_content)
+          File.chmod(0600, config_path)
+          puts "✅ WireGuard config created at #{config_path}"
+          puts "   Public Key: #{public_key}"
+        rescue Errno::EACCES => e
+          puts "⚠️  Permission denied creating WireGuard config: #{e.message}"
+          puts "   Please run with sudo or ensure write access to #{File.dirname(config_path)}"
+          puts "   Or create the config file manually at: #{config_path}"
+        rescue => e
+          puts "⚠️  Failed to create WireGuard config: #{e.message}"
+          puts "   You may need to create it manually at: #{config_path}"
+        end
+      else
+        puts "✅ WireGuard config file exists at #{config_path}"
+      end
+    end
+
     def start_api_server
-      require 'sinatra/base'
+      require 'rack'
+      require 'rack/handler/webrick'
+
       @api_server = ApiServer.new(self)
-      puts "Starting API server on port #{ENV['NODE_API_PORT'] || 51820}"
-      @api_server.run!
+      port = ENV['NODE_API_PORT'] || 51820
+      puts "Starting API server on port #{port}"
+
+      Rack::Handler::WEBrick.run(@api_server, Port: port.to_i, Host: '0.0.0.0')
     rescue => e
       puts "API server error: #{e.message}"
       puts e.backtrace.first(5)

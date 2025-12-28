@@ -21,7 +21,8 @@ services:
       - CONTRACT_ABI_PATH=${CONTRACT_ABI_PATH:-}
     volumes:
       - ./keys:/app/keys:ro
-      - /etc/wireguard:/etc/wireguard:ro
+      # Mount /etc/wireguard với quyền write để agent có thể tạo config file
+      - /etc/wireguard:/etc/wireguard:rw
     network_mode: host
     cap_add:
       - NET_ADMIN
