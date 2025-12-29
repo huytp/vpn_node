@@ -59,7 +59,6 @@ module VPNNode
         wg_keys = get_wireguard_keys
         if wg_keys
           payload[:wireguard] = {
-            private_key: wg_keys[:private_key],
             public_key: wg_keys[:public_key],
             listen_port: wg_keys[:listen_port],
             endpoint: wg_keys[:endpoint]
@@ -264,15 +263,21 @@ module VPNNode
       puts "📝 Creating WireGuard config at: #{config_path}"
       FileUtils.mkdir_p(config_dir)
 
-      # Generate address (10.0.0.x/24)
-      node_index = @signer.address[-2..-1].to_i(16) % 254 + 1
-      address = "10.0.0.#{node_index}/24"
+      # Server sử dụng địa chỉ cố định 10.0.0.1/24
+      address = "10.0.0.1/24"
+
+      # Detect network interface (ens4, eth0, etc.)
+      network_interface = ENV['NETWORK_INTERFACE'] || 'ens4'
 
       config_content = <<~CONFIG
         [Interface]
-        PrivateKey = #{private_key}
         Address = #{address}
         ListenPort = #{listen_port}
+        PrivateKey = #{private_key}
+
+        # Enable forwarding + NAT
+        PostUp = sysctl -w net.ipv4.ip_forward=1; iptables -A FORWARD -i wg0 -j ACCEPT; iptables -A FORWARD -o wg0 -j ACCEPT; iptables -t nat -A POSTROUTING -o #{network_interface} -j MASQUERADE
+        PostDown = iptables -D FORWARD -i wg0 -j ACCEPT; iptables -D FORWARD -o wg0 -j ACCEPT; iptables -t nat -D POSTROUTING -o #{network_interface} -j MASQUERADE
       CONFIG
 
       begin

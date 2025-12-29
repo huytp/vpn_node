@@ -14,20 +14,19 @@ module VPNNode
       @signer = agent.instance_variable_get(:@signer)
     end
 
-    # GET /api/info - Lấy thông tin node (public key, private key, endpoint)
+    # GET /api/info - Lấy thông tin node (public key, endpoint)
     get '/api/info' do
       content_type :json
 
       begin
         # Lấy WireGuard keys từ config file hoặc generate
-        wg_private_key, wg_public_key = get_wireguard_keys
+        _wg_private_key, wg_public_key = get_wireguard_keys
         wg_listen_port = get_wireguard_listen_port
         wg_endpoint = get_wireguard_endpoint
 
         {
           node_address: @signer.address,
           wireguard: {
-            private_key: wg_private_key,
             public_key: wg_public_key,
             listen_port: wg_listen_port,
             endpoint: wg_endpoint
