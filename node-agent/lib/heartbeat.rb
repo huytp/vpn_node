@@ -276,7 +276,7 @@ module VPNNode
         PrivateKey = #{private_key}
 
         # Enable forwarding + NAT
-        PostUp = sysctl -w net.ipv4.ip_forward=1; iptables -A FORWARD -i wg0 -j ACCEPT; iptables -A FORWARD -o wg0 -j ACCEPT; iptables -t nat -A POSTROUTING -o #{network_interface} -j MASQUERADE
+        PostUp = iptables -A FORWARD -i wg0 -j ACCEPT; iptables -A FORWARD -o wg0 -j ACCEPT; iptables -t nat -A POSTROUTING -o #{network_interface} -j MASQUERADE
         PostDown = iptables -D FORWARD -i wg0 -j ACCEPT; iptables -D FORWARD -o wg0 -j ACCEPT; iptables -t nat -D POSTROUTING -o #{network_interface} -j MASQUERADE
       CONFIG
 
