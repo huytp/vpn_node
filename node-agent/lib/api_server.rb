@@ -254,11 +254,18 @@ module VPNNode
       node_index = @signer.address[-2..-1].to_i(16) % 254 + 1
       address = "10.0.0.#{node_index}/24"
 
+      # Detect network interface (ens4, eth0, etc.)
+      network_interface = ENV['NETWORK_INTERFACE'] || 'ens4'
+
       config_content = <<~CONFIG
         [Interface]
         PrivateKey = #{private_key}
         Address = #{address}
         ListenPort = #{get_wireguard_listen_port}
+
+        # Enable forwarding + NAT
+        PostUp = sysctl -w net.ipv4.ip_forward=1; iptables -A FORWARD -i wg0 -j ACCEPT; iptables -A FORWARD -o wg0 -j ACCEPT; iptables -t nat -A POSTROUTING -o #{network_interface} -j MASQUERADE
+        PostDown = iptables -D FORWARD -i wg0 -j ACCEPT; iptables -D FORWARD -o wg0 -j ACCEPT; iptables -t nat -D POSTROUTING -o #{network_interface} -j MASQUERADE
       CONFIG
 
       begin
