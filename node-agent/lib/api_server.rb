@@ -451,6 +451,15 @@ module VPNNode
           return false
         end
 
+        # Backup file config trước khi down (vì wg-quick down có thể xóa file)
+        backup_path = "#{config_path}.reload_backup"
+        begin
+          FileUtils.cp(config_path, backup_path)
+          puts "✅ Backed up config to #{backup_path}"
+        rescue => e
+          puts "⚠️  Failed to backup config: #{e.message}"
+        end
+
         # Down interface
         puts "Bringing down interface #{interface}..."
         down_result = system("wg-quick down #{interface} >/dev/null 2>&1")
@@ -463,14 +472,35 @@ module VPNNode
         # Đợi một chút để đảm bảo interface đã down hoàn toàn
         sleep(0.5)
 
+        # Kiểm tra file config còn tồn tại không, nếu không thì restore từ backup
+        unless File.exist?(config_path)
+          puts "⚠️  Config file disappeared after down, restoring from backup..."
+          if File.exist?(backup_path)
+            FileUtils.cp(backup_path, config_path)
+            File.chmod(0600, config_path)
+            puts "✅ Restored config from backup"
+          else
+            puts "❌ Backup file not found, cannot restore config"
+            return false
+          end
+        end
+
         # Up lại interface với config mới
         puts "Bringing up interface #{interface}..."
         up_result = system("wg-quick up #{interface} >/dev/null 2>&1")
         unless up_result
           error_output = `wg-quick up #{interface} 2>&1`
           puts "⚠️  Failed to reload WireGuard config: #{error_output.strip}"
+          puts "   Config path: #{config_path}"
+          puts "   File exists: #{File.exist?(config_path)}"
+
+          # Cleanup backup
+          FileUtils.rm_f(backup_path) if File.exist?(backup_path)
           return false
         end
+
+        # Cleanup backup file sau khi thành công
+        FileUtils.rm_f(backup_path) if File.exist?(backup_path)
 
         puts "✅ WireGuard config reloaded successfully"
         return true
