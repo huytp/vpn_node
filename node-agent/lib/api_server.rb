@@ -441,10 +441,14 @@ module VPNNode
           puts "⚠️  Failed to bring up WireGuard interface: #{error_output.strip}"
           return false
         end
+        puts "✅ WireGuard interface #{interface} brought up successfully"
         return true
       else
-        # Interface đã tồn tại, chỉ reload config
-        # Validate config trước khi reload bằng cách strip
+        # Interface đã tồn tại, reload config bằng cách down và up lại
+        # Cách này đảm bảo peer được cập nhật đúng cách
+        puts "Reloading WireGuard config for #{interface}..."
+
+        # Validate config trước khi reload
         stripped_output = `wg-quick strip #{config_path} 2>&1`
 
         unless $?.success?
@@ -458,18 +462,23 @@ module VPNNode
           return false
         end
 
-        # Config hợp lệ, reload
-        reload_result = IO.popen("wg syncconf #{interface} - 2>&1", 'w') do |io|
-          io.write(stripped_output)
-          io.close_write
+        # Down interface trước
+        down_result = system("wg-quick down #{config_path} >/dev/null 2>&1")
+        unless down_result
+          error_output = `wg-quick down #{config_path} 2>&1`
+          puts "⚠️  Warning: Failed to bring down WireGuard interface: #{error_output.strip}"
+          # Tiếp tục thử up lại vì có thể interface đã down rồi
         end
 
-        unless $?.success?
-          error_output = `wg syncconf #{interface} - 2>&1 < /dev/null`
+        # Up lại interface với config mới
+        up_result = system("wg-quick up #{config_path} >/dev/null 2>&1")
+        unless up_result
+          error_output = `wg-quick up #{config_path} 2>&1`
           puts "⚠️  Failed to reload WireGuard config: #{error_output.strip}"
           return false
         end
 
+        puts "✅ WireGuard config reloaded successfully"
         return true
       end
     rescue => e
