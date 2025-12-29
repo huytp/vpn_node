@@ -357,32 +357,46 @@ module VPNNode
 
       # Đọc config
       lines = File.readlines(config_path)
-      new_lines = []
-      skip_peer = false
-      skip_until_next_section = false
 
-      lines.each do |line|
-        # Tìm comment với connection_id
+      # Tìm index của comment chứa connection_id
+      comment_index = nil
+      lines.each_with_index do |line, index|
         if line.include?("Connection: #{connection_id}")
-          skip_peer = true
-          skip_until_next_section = true
-          next
+          comment_index = index
+          break
         end
-
-        # Nếu đang skip peer section
-        if skip_until_next_section
-          # Bỏ qua các dòng cho đến khi gặp section mới ([Peer] hoặc [Interface])
-          if line.strip.start_with?('[')
-            skip_until_next_section = false
-            # Không thêm dòng [Peer] của peer bị xóa
-            next if line.strip == '[Peer]'
-            new_lines << line
-          end
-          next
-        end
-
-        new_lines << line
       end
+
+      # Nếu không tìm thấy connection_id, peer không tồn tại
+      unless comment_index
+        return { success: false, error: "Peer with connection_id #{connection_id} not found" }
+      end
+
+      # Quét ngược lại từ comment để tìm [Peer] gần nhất
+      peer_start_index = nil
+      (comment_index.downto(0)).each do |i|
+        if lines[i].strip == '[Peer]'
+          peer_start_index = i
+          break
+        end
+      end
+
+      # Nếu không tìm thấy [Peer], có thể format không đúng
+      unless peer_start_index
+        return { success: false, error: "Could not find [Peer] section for connection_id #{connection_id}" }
+      end
+
+      # Tìm index của section tiếp theo (hoặc cuối file)
+      peer_end_index = lines.length
+      ((peer_start_index + 1)...lines.length).each do |i|
+        if lines[i].strip.start_with?('[')
+          peer_end_index = i
+          break
+        end
+      end
+
+      # Xóa peer section (từ [Peer] đến trước section tiếp theo)
+      new_lines = lines[0...peer_start_index] + lines[peer_end_index..-1]
 
       # Backup và ghi config mới
       FileUtils.cp(config_path, "#{config_path}.backup") if File.exist?(config_path)
