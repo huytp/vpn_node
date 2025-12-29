@@ -1,6 +1,7 @@
 require 'sinatra/base'
 require 'json'
 require 'shellwords'
+require 'fileutils'
 require_relative 'wireguard'
 
 module VPNNode
@@ -419,14 +420,9 @@ module VPNNode
 
     def reload_wireguard_config
       # Reload WireGuard config
-      interface = @config.wg_interface
-      config_path = @config.wg_config_path
-
-      # Đảm bảo config_path luôn là /etc/wireguard/wg0.conf
-      unless config_path == '/etc/wireguard/wg0.conf'
-        config_path = '/etc/wireguard/wg0.conf'
-        @config.wg_config_path = config_path
-      end
+      # Fix cứng interface name là wg0
+      interface = 'wg0'
+      config_path = '/etc/wireguard/wg0.conf'
 
       return unless File.exist?(config_path)
 
@@ -436,9 +432,9 @@ module VPNNode
       if interface_exists.empty?
         # Interface chưa tồn tại, cần up interface
         puts "Interface #{interface} not found, bringing it up..."
-        result = system("wg-quick up #{config_path} >/dev/null 2>&1")
+        result = system("wg-quick up #{interface} >/dev/null 2>&1")
         unless result
-          error_output = `wg-quick up #{config_path} 2>&1`
+          error_output = `wg-quick up #{interface} 2>&1`
           puts "⚠️  Failed to bring up WireGuard interface: #{error_output.strip}"
           return false
         end
@@ -446,70 +442,33 @@ module VPNNode
         return true
       else
         # Interface đã tồn tại, reload config bằng cách down và up lại
-        # Cách này đảm bảo peer được cập nhật đúng cách
+        # Sử dụng interface name để wg-quick tự động tìm file config
         puts "Reloading WireGuard config for #{interface}..."
 
-        # Đảm bảo file config tồn tại và có quyền đọc
+        # Đảm bảo file config tồn tại
         unless File.exist?(config_path)
           puts "⚠️  Config file does not exist: #{config_path}"
           return false
         end
 
-        unless File.readable?(config_path)
-          puts "⚠️  Config file is not readable: #{config_path}"
-          return false
-        end
-
-        # Validate config trước khi reload
-        stripped_output = `wg-quick strip #{config_path} 2>&1`
-
-        unless $?.success?
-          puts "⚠️  WireGuard config validation failed: #{stripped_output.strip}"
-          puts "   Config file may have invalid keys or format"
-          return false
-        end
-
-        if stripped_output.strip.empty?
-          puts "⚠️  WireGuard config is empty after stripping"
-          return false
-        end
-
-        # Sử dụng đường dẫn tuyệt đối và escape đúng cách
-        config_path_escaped = Shellwords.escape(config_path)
-        interface_escaped = Shellwords.escape(interface)
-
-        # Down interface trước - ưu tiên sử dụng interface name
-        # wg-quick down với interface name sẽ tự động tìm file config
-        # trong /etc/wireguard/<interface>.conf
-        down_result = system("wg-quick down #{interface_escaped} >/dev/null 2>&1")
-
-        # Nếu down với interface name thất bại, thử với config path
+        # Down interface
+        puts "Bringing down interface #{interface}..."
+        down_result = system("wg-quick down #{interface} >/dev/null 2>&1")
         unless down_result
-          down_result = system("wg-quick down #{config_path_escaped} >/dev/null 2>&1")
-        end
-
-        unless down_result
-          # Không phải lỗi nghiêm trọng - interface có thể đã down rồi
-          puts "⚠️  Warning: Could not bring down interface (may already be down)"
+          error_output = `wg-quick down #{interface} 2>&1`
+          puts "⚠️  Warning: Failed to bring down interface: #{error_output.strip}"
+          # Tiếp tục thử up lại vì có thể interface đã down rồi
         end
 
         # Đợi một chút để đảm bảo interface đã down hoàn toàn
         sleep(0.5)
 
-        # Kiểm tra lại file config tồn tại trước khi up
-        unless File.exist?(config_path)
-          puts "⚠️  Config file disappeared: #{config_path}"
-          return false
-        end
-
-        # Up lại interface với config mới - sử dụng đường dẫn tuyệt đối
-        up_result = system("wg-quick up #{config_path_escaped} >/dev/null 2>&1")
+        # Up lại interface với config mới
+        puts "Bringing up interface #{interface}..."
+        up_result = system("wg-quick up #{interface} >/dev/null 2>&1")
         unless up_result
-          error_output = `wg-quick up #{config_path_escaped} 2>&1`
+          error_output = `wg-quick up #{interface} 2>&1`
           puts "⚠️  Failed to reload WireGuard config: #{error_output.strip}"
-          puts "   Config path: #{config_path}"
-          puts "   File exists: #{File.exist?(config_path)}"
-          puts "   File readable: #{File.readable?(config_path)}"
           return false
         end
 
