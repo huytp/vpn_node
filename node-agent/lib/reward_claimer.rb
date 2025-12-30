@@ -66,7 +66,14 @@ module VPNNode
         return { success: false, error: 'Invalid proof data', details: 'Proof validation failed' }
       end
 
-      # 3. Check if already claimed
+      # 3. Check epoch status on blockchain before claiming
+      epoch_check = check_epoch_status(epoch, proof_data['merkle_root'])
+      unless epoch_check[:valid]
+        puts "❌ Cannot claim: #{epoch_check[:reason]}"
+        return { success: false, error: epoch_check[:reason] }
+      end
+
+      # 4. Check if already claimed
       if already_claimed?(epoch)
         puts "⚠️  Reward already claimed for epoch #{epoch}"
         # Update backend status
@@ -74,7 +81,7 @@ module VPNNode
         return { success: true, already_claimed: true, epoch: epoch }
       end
 
-      # 4. Build transaction data
+      # 5. Build transaction data
       amount = proof_data['amount'].to_i
       proof = proof_data['proof'].map { |p| p.start_with?('0x') ? p : "0x#{p}" }
       merkle_root = proof_data['merkle_root']
@@ -84,17 +91,32 @@ module VPNNode
       puts "      Proof length: #{proof.length}"
       puts "      Merkle root: #{merkle_root}"
 
+      # Explain empty proof case
+      if proof.empty?
+        puts "   ℹ️  Empty proof array (valid when epoch has only 1 node)"
+        puts "      Contract will verify: leaf == root (no proof needed)"
+        puts "   💡 Claim is still required to mint tokens!"
+      end
+
       # Verify proof locally before sending transaction
       if merkle_root && !proof.empty?
         if verify_proof_locally(amount, proof, merkle_root)
           puts "   ✅ Local proof verification passed"
         else
           puts "   ⚠️  Local proof verification failed - proof may be invalid"
-          puts "      Will still attempt on-chain (contract will reject if invalid)"
+          puts "      Will still attempt on-chain (contract will verify)"
+        end
+      elsif merkle_root && proof.empty?
+        # Verify empty proof case: leaf should equal root
+        if verify_proof_locally(amount, proof, merkle_root)
+          puts "   ✅ Local verification passed (leaf == root for single node)"
+        else
+          puts "   ⚠️  Local verification failed - leaf != root"
+          puts "      Will still attempt on-chain (contract will verify)"
         end
       end
 
-      # 5. Claim on blockchain
+      # 6. Claim on blockchain
       begin
         tx_hash = claim_on_blockchain(epoch, amount, proof)
 
@@ -456,6 +478,30 @@ module VPNNode
       function_selector = "0x" + calculate_claim_reward_selector
       encoded_params = encode_claim_reward_params(epoch, amount, proof)
       "#{function_selector}#{encoded_params}"
+    end
+
+    # Encode epochRoots(uint256) function call to get merkle root
+    def encode_epoch_root_call(epoch)
+      # Function selector: keccak256("epochRoots(uint256)")[0:4]
+      function_sig = "epochRoots(uint256)"
+      hash = Digest::Keccak.hexdigest(function_sig, 256)
+      selector = "0x" + hash[0..7]
+
+      encoded_epoch = encode_uint256(epoch)
+
+      "#{selector}#{encoded_epoch}"
+    end
+
+    # Encode epochRoots(uint256) function call to get merkle root
+    def encode_epoch_root_call(epoch)
+      # Function selector: keccak256("epochRoots(uint256)")[0:4]
+      function_sig = "epochRoots(uint256)"
+      hash = Digest::Keccak.hexdigest(function_sig, 256)
+      selector = "0x" + hash[0..7]
+
+      encoded_epoch = encode_uint256(epoch)
+
+      "#{selector}#{encoded_epoch}"
     end
 
     # Encode claimed(uint256,address) function call
