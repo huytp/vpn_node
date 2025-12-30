@@ -416,22 +416,29 @@ module VPNNode
 
     def already_claimed?(epoch)
       begin
+        puts "   🔍 Checking if already claimed for epoch #{epoch}..."
+
         # Encode function call for claimed(uint256,address)
         function_data = encode_claimed_call(epoch, @signer.address)
+        puts "      Function data: #{function_data[0..50]}..."
 
         # Call contract
         result = @rpc.eth_call(@contract_address, function_data)
+        puts "      Contract result: #{result}"
 
         # Result is a hex boolean: 0x0000...0000 (false) or 0x0000...0001 (true)
         claimed = result.to_i(16) > 0
         if claimed
-          puts "   ℹ️  Checked on-chain: reward already claimed for epoch #{epoch}"
+          puts "   ✅ Already claimed: true"
+        else
+          puts "   ✅ Already claimed: false (can claim)"
         end
         claimed
       rescue => e
         # If eth_call fails, it might be because the function doesn't exist or other issues
         # We'll proceed with the claim attempt and let the transaction fail if already claimed
         puts "   ⚠️  Could not check if already claimed on-chain: #{e.message}"
+        puts "      Error class: #{e.class}"
         puts "      Will attempt claim - transaction will revert if already claimed"
         false
       end
