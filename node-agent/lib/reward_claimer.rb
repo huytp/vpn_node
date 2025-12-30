@@ -34,9 +34,19 @@ module VPNNode
         return nil
       end
 
-      JSON.parse(response.body)
+      proof_data = JSON.parse(response.body)
+
+      # Log proof data for debugging
+      puts "   📥 Proof data from backend:"
+      puts "      Epoch: #{proof_data['epoch']}"
+      puts "      Node: #{proof_data['node']}"
+      puts "      Amount: #{proof_data['amount']}"
+      puts "      Proof array length: #{proof_data['proof']&.length || 0}"
+
+      proof_data
     rescue => e
       puts "Error fetching proof: #{e.message}"
+      puts e.backtrace.first(3) if e.backtrace
       nil
     end
 
@@ -52,8 +62,8 @@ module VPNNode
 
       # 2. Verify proof data
       unless verify_proof_data(proof_data)
-        puts "❌ Invalid proof data"
-        return { success: false, error: 'Invalid proof data' }
+        puts "❌ Invalid proof data - cannot proceed with claim"
+        return { success: false, error: 'Invalid proof data', details: 'Proof validation failed' }
       end
 
       # 3. Check if already claimed
@@ -362,10 +372,45 @@ module VPNNode
 
     def verify_proof_data(proof_data)
       required_keys = ['epoch', 'node', 'amount', 'proof']
-      required_keys.all? { |key| proof_data.key?(key) } &&
-        proof_data['node'].downcase == @signer.address.downcase &&
-        proof_data['proof'].is_a?(Array) &&
-        proof_data['amount'].to_i > 0
+
+      # Check all required keys exist
+      unless required_keys.all? { |key| proof_data.key?(key) }
+        missing = required_keys.reject { |key| proof_data.key?(key) }
+        puts "   ❌ Missing required keys: #{missing.join(', ')}"
+        return false
+      end
+
+      # Check node address matches
+      unless proof_data['node'].downcase == @signer.address.downcase
+        puts "   ❌ Node address mismatch:"
+        puts "      Expected: #{@signer.address}"
+        puts "      Got: #{proof_data['node']}"
+        return false
+      end
+
+      # Check proof is an array
+      unless proof_data['proof'].is_a?(Array)
+        puts "   ❌ Proof is not an array: #{proof_data['proof'].class}"
+        return false
+      end
+
+      # Check proof is not empty (critical for Merkle verification)
+      if proof_data['proof'].empty?
+        puts "   ❌ Proof array is empty! Cannot verify Merkle proof."
+        puts "      This usually means:"
+        puts "      - Epoch not committed to blockchain yet"
+        puts "      - Node has no reward for this epoch"
+        puts "      - Merkle tree not built correctly"
+        return false
+      end
+
+      # Check amount is positive
+      unless proof_data['amount'].to_i > 0
+        puts "   ❌ Invalid amount: #{proof_data['amount']}"
+        return false
+      end
+
+      true
     end
 
     # Function selector for claimReward(uint256,uint256,bytes32[])
