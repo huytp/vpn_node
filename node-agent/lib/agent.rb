@@ -230,23 +230,71 @@ module VPNNode
 
       return map unless File.exist?(config_path)
 
-      config_content = File.read(config_path)
-      current_connection_id = nil
+      begin
+        config_content = File.read(config_path)
+        puts "   📄 Reading WireGuard config from: #{config_path}"
+        puts "   📄 Config file size: #{config_content.length} bytes"
 
-      config_content.each_line do |line|
-        # Tìm comment chứa connection_id
-        if line.strip.start_with?('# Connection:')
-          current_connection_id = line.strip.split(':').last.strip
-        # Tìm PublicKey trong [Peer] section
-        elsif line.strip.start_with?('PublicKey =')
-          public_key = line.strip.split('=').last.strip
-          if current_connection_id
-            map[public_key] = current_connection_id
-          end
-        # Reset khi gặp [Peer] mới
-        elsif line.strip == '[Peer]'
-          current_connection_id = nil
+        # Debug: Hiển thị một phần config để kiểm tra format
+        lines = config_content.lines
+        puts "   📄 First 20 lines of config:"
+        lines.first(20).each_with_index do |line, idx|
+          puts "      #{idx + 1}: #{line.chomp}"
         end
+
+        current_connection_id = nil
+        in_peer_section = false
+
+        config_content.each_line do |line|
+          line_stripped = line.strip
+
+          # Bắt đầu [Peer] section
+          if line_stripped == '[Peer]'
+            in_peer_section = true
+            current_connection_id = nil
+            next
+          end
+
+          # Kết thúc [Peer] section khi gặp [Interface] hoặc section khác
+          if line_stripped.start_with?('[') && line_stripped != '[Peer]'
+            in_peer_section = false
+            current_connection_id = nil
+            next
+          end
+
+          # Chỉ parse trong [Peer] section
+          next unless in_peer_section
+
+          # Tìm comment chứa connection_id (có thể có khoảng trắng)
+          if line_stripped.include?('# Connection:') || line_stripped.include?('#Connection:')
+            # Parse: "# Connection: connection_id" hoặc "#Connection: connection_id"
+            parts = line_stripped.split(':')
+            if parts.length >= 2
+              current_connection_id = parts[1..-1].join(':').strip
+              puts "   🔍 Found connection_id: #{current_connection_id} in config"
+            end
+          # Tìm PublicKey trong [Peer] section
+          elsif line_stripped.start_with?('PublicKey') && line_stripped.include?('=')
+            parts = line_stripped.split('=', 2)
+            if parts.length == 2
+              public_key = parts[1].strip
+              if current_connection_id
+                map[public_key] = current_connection_id
+                puts "   ✅ Mapped peer #{public_key[0..8]}... → connection #{current_connection_id[0..8]}..."
+              else
+                puts "   ⚠️  Warning: Found PublicKey #{public_key[0..8]}... but no connection_id in [Peer] section"
+              end
+            end
+          end
+        end
+
+        puts "   📊 Total peer mappings: #{map.length}"
+        map.each do |peer, conn|
+          puts "      - #{peer[0..12]}... → #{conn[0..12]}..."
+        end if map.any?
+      rescue => e
+        puts "   ❌ Error parsing WireGuard config: #{e.message}"
+        puts e.backtrace.first(3)
       end
 
       map
@@ -281,18 +329,27 @@ module VPNNode
         if wg_stats.any?
           # Group traffic theo connection_id
           connection_traffic = {}
+          unmapped_peers = []
 
           wg_stats.each do |peer_public_key, stats|
             connection_id = peer_to_connection[peer_public_key]
 
-            # Nếu không tìm thấy mapping, bỏ qua peer này
+            # Nếu không tìm thấy mapping
             unless connection_id
-              puts "⚠️  Warning: No connection_id found for peer #{peer_public_key[0..8]}..."
-              next
+              unmapped_peers << peer_public_key
+              # Fallback: nếu chỉ có 1 active connection, gán cho nó
+              if active_connections.length == 1
+                connection_id = active_connections.first['connection_id']
+                puts "   ⚠️  Warning: No mapping for peer #{peer_public_key[0..8]}..., assigning to single connection #{connection_id[0..8]}..."
+              else
+                puts "   ⚠️  Warning: No connection_id found for peer #{peer_public_key[0..8]}... (skipping)"
+                next
+              end
             end
 
             # Chỉ xử lý nếu connection đang active
             unless active_connections.any? { |conn| conn['connection_id'] == connection_id }
+              puts "   ⚠️  Warning: Connection #{connection_id[0..8]}... not in active connections list"
               next
             end
 
