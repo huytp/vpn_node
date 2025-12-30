@@ -4,7 +4,7 @@ require_relative 'heartbeat'
 require_relative 'traffic_meter'
 require_relative 'traffic_sender'
 require_relative 'wireguard'
-# require_relative 'reward_claimer' # Moved to backend
+require_relative 'reward_claimer'
 require_relative 'api_server'
 require 'thread'
 
@@ -26,9 +26,8 @@ module VPNNode
       @heartbeat_sender = HeartbeatSender.new(@signer, @config.backend_url, @config)
       @wg_previous_stats = {} # Lưu stats trước đó để tính delta
 
-      # Reward claiming is now handled by backend (SettlementService)
-      # No longer needed in vpn-node
-      @reward_claimer = nil
+      # Initialize reward claimer if contract address is provided
+      @reward_claimer = initialize_reward_claimer
 
       @running = false
       @threads = []
@@ -53,7 +52,11 @@ module VPNNode
       @threads << Thread.new { traffic_report_loop }
 
       # Start reward claiming thread (if enabled)
-      # Reward claiming moved to backend (SettlementService)
+      if @reward_claimer
+        @threads << Thread.new { reward_claim_loop }
+      else
+        puts "⚠️  Reward claiming disabled (REWARD_CONTRACT_ADDRESS not set)"
+      end
 
       # Handle signals
       Signal.trap('INT') { stop }
@@ -272,6 +275,80 @@ module VPNNode
       map
     end
 
+    def initialize_reward_claimer
+      rpc_url = ENV['RPC_URL']
+      contract_address = ENV['REWARD_CONTRACT_ADDRESS']
+      api_key = ENV['TATUM_API_KEY']
+
+      if contract_address && rpc_url
+        puts "✅ Initializing reward claimer..."
+        RewardClaimer.new(
+          @signer,
+          @config.backend_url,
+          rpc_url,
+          contract_address,
+          nil, # contract_abi_path
+          api_key
+        )
+      else
+        nil
+      end
+    end
+
+    def reward_claim_loop
+      # claim_interval = (ENV['REWARD_CLAIM_INTERVAL'] || '300').to_i # Default 5 minutes
+      claim_interval = 30
+      puts "💰 Starting reward claim loop (interval: #{claim_interval}s)"
+
+      loop do
+        # break unless @running
+        sleep 10
+
+        begin
+          # Get pending rewards
+          pending_rewards = @reward_claimer.get_pending_rewards
+
+          puts "💰 Pending rewards: #{pending_rewards}"
+          if pending_rewards.empty?
+            # puts "💰 No pending rewards to claim"
+            next
+          end
+
+          puts "💰 Found #{pending_rewards.length} unclaimed reward(s), claiming..."
+
+          # Claim each pending reward
+          pending_rewards.each do |reward_info|
+            epoch_id = reward_info[:epoch]
+            amount = reward_info[:amount]
+
+            puts "💰 Claiming epoch #{epoch_id} (#{amount} tokens)..."
+
+            result = @reward_claimer.claim_reward(epoch_id)
+
+            if result[:success]
+              if result[:already_claimed]
+                puts "   ⚠️  Already claimed (status synced)"
+              else
+                puts "   ✅ Claimed successfully!"
+                puts "      TX: #{result[:tx_hash]}"
+              end
+            else
+              puts "   ❌ Claim failed: #{result[:error]}"
+            end
+
+            # Small delay between claims to avoid rate limiting
+            sleep 2 if pending_rewards.length > 1
+          end
+        rescue => e
+          puts "💰 Reward claim loop error: #{e.message}"
+          puts e.backtrace.first(3)
+        end
+      end
+    rescue => e
+      puts "💰 Reward claim loop error: #{e.message}"
+      puts e.backtrace
+    end
+
     # Đồng bộ VPN connections từ backend với TrafficMeter sessions
     def sync_wireguard_sessions
       begin
@@ -414,8 +491,6 @@ module VPNNode
         return []
       end
     end
-
-    # Reward claiming moved to backend (SettlementService.commit_to_blockchain)
 
     def stop
       puts "\nShutting down node agent..."

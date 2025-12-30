@@ -6,8 +6,8 @@ require_relative 'rpc_client'
 
 module VPNNode
   class RewardClaimer
-    DEFAULT_GAS_LIMIT = 500_000
-    POLYGON_AMOY_CHAIN_ID = 80002
+    DEFAULT_GAS_LIMIT = 300_000
+    POLYGON_AMOY_CHAIN_ID = 80_002
 
     def initialize(signer, backend_url, rpc_url, contract_address, contract_abi_path = nil, api_key = nil)
       @signer = signer
@@ -41,73 +41,158 @@ module VPNNode
     end
 
     def claim_reward(epoch)
-      puts "Claiming reward for epoch #{epoch}..."
+      puts "🔄 Claiming reward for epoch #{epoch}..."
 
       # 1. Fetch proof from backend
       proof_data = fetch_proof(epoch)
-      return false unless proof_data
+      unless proof_data
+        puts "❌ Failed to fetch proof from backend"
+        return { success: false, error: 'Failed to fetch proof' }
+      end
 
       # 2. Verify proof data
       unless verify_proof_data(proof_data)
-        puts "Invalid proof data"
-        return false
+        puts "❌ Invalid proof data"
+        return { success: false, error: 'Invalid proof data' }
       end
 
       # 3. Check if already claimed
       if already_claimed?(epoch)
-        puts "Reward already claimed for epoch #{epoch}"
-        return true
+        puts "⚠️  Reward already claimed for epoch #{epoch}"
+        # Update backend status
+        update_claimed_status(epoch, true)
+        return { success: true, already_claimed: true, epoch: epoch }
       end
 
       # 4. Build transaction data
       amount = proof_data['amount'].to_i
       proof = proof_data['proof'].map { |p| p.start_with?('0x') ? p : "0x#{p}" }
 
-      # 5. Build, sign and send transaction
+      # 5. Claim on blockchain
       begin
-        # Encode function call
-        function_data = encode_claim_reward_call(epoch, amount, proof)
+        tx_hash = claim_on_blockchain(epoch, amount, proof)
 
-        puts "📝 Building transaction..."
-        puts "   Contract: #{@contract_address}"
-        puts "   Function data: #{function_data[0..100]}..."
-
-        # Get transaction parameters
-        nonce = get_nonce
-        gas_price = get_gas_price
-        gas_limit = estimate_gas(@contract_address, function_data)
-
-        puts "⛽ Gas: price=#{gas_price}, limit=#{gas_limit}, estimated cost=#{(gas_price * gas_limit) / 1e18} MATIC"
-
-        # Build transaction
-        transaction = build_transaction(@contract_address, function_data, nonce, gas_price, gas_limit)
-
-        # Sign transaction
-        signed_tx = sign_transaction(transaction)
-
-        # Send transaction
-        tx_hash = send_transaction(signed_tx)
-
-        puts "✅ Transaction sent!"
-        puts "   TX Hash: #{tx_hash}"
-        puts "   Explorer: https://amoy.polygonscan.com/tx/#{tx_hash}"
-
-        # Wait for receipt
-        receipt = wait_for_receipt(tx_hash)
-
-        if receipt && receipt['status'] == '0x1'
+        if tx_hash
           puts "✅ Reward claimed successfully!"
-          puts "   Block: #{receipt['blockNumber']}"
-          puts "   Gas used: #{receipt['gasUsed'].to_i(16)}"
-          true
+          puts "   Transaction: https://amoy.polygonscan.com/tx/#{tx_hash}"
+
+          # Update backend status
+          update_claimed_status(epoch, true, tx_hash)
+
+          return {
+            success: true,
+            tx_hash: tx_hash,
+            amount: amount,
+            epoch: epoch,
+            node: @signer.address
+          }
         else
-          puts "❌ Transaction failed"
-          false
+          puts "❌ Transaction failed on blockchain"
+          return { success: false, error: 'Transaction failed on blockchain' }
         end
       rescue => e
         puts "❌ Failed to claim reward: #{e.message}"
         puts e.backtrace.first(5)
-        false
+        return { success: false, error: e.message }
+      end
+    end
+
+    # Claim reward on blockchain (moved from backend)
+    def claim_on_blockchain(epoch_id, amount, proof_array)
+      unless @contract_address
+        raise "Missing REWARD_CONTRACT_ADDRESS"
+      end
+
+      puts "📝 Building claim transaction..."
+      puts "   Contract: #{@contract_address}"
+      puts "   Epoch: #{epoch_id}"
+      puts "   Amount: #{amount}"
+
+      # Function selector for claimReward(uint256,uint256,bytes32[])
+      function_selector = "0x" + calculate_claim_reward_selector
+
+      # Encode parameters
+      encoded_params = encode_claim_reward_params(epoch_id, amount, proof_array)
+
+      # Build transaction data
+      function_data = "#{function_selector}#{encoded_params}"
+
+      # Get transaction parameters
+      nonce_hex = @rpc.eth_get_transaction_count(@key.address.to_s, 'latest')
+      nonce = @rpc.hex_to_int(nonce_hex)
+
+      gas_price_hex = @rpc.eth_gas_price
+      gas_price = @rpc.hex_to_int(gas_price_hex)
+      gas_price = 30_000_000_000 if gas_price == 0 # Default 30 gwei
+
+      # Estimate gas
+      begin
+        gas_limit_hex = @rpc.eth_estimate_gas({
+          from: @key.address.to_s,
+          to: @contract_address,
+          data: function_data
+        })
+        gas_limit = @rpc.hex_to_int(gas_limit_hex)
+        gas_limit = (gas_limit * 1.2).to_i # Add 20% buffer
+      rescue => e
+        puts "⚠️  Gas estimation failed: #{e.message}, using default"
+        gas_limit = DEFAULT_GAS_LIMIT
+      end
+
+      puts "⛽ Gas: price=#{gas_price}, limit=#{gas_limit}"
+
+      # Build transaction
+      transaction = Eth::Tx.new(
+        chain_id: @chain_id,
+        nonce: nonce,
+        gas_price: gas_price,
+        gas_limit: gas_limit,
+        to: @contract_address,
+        data: function_data[2..-1] # Remove 0x prefix
+      )
+
+      # Sign transaction
+      transaction.sign(@key)
+      signed_tx = transaction.hex
+      signed_tx = "0x#{signed_tx}" unless signed_tx.start_with?('0x')
+
+      # Send transaction
+      tx_hash = @rpc.eth_send_raw_transaction(signed_tx)
+      puts "📤 Transaction sent: #{tx_hash}"
+
+      # Wait for receipt
+      receipt = wait_for_receipt(tx_hash, 60)
+      if receipt && receipt['status'] == '0x1'
+        puts "✅ Transaction confirmed!"
+        puts "   Block: #{receipt['blockNumber']}, Gas used: #{receipt['gasUsed'].to_i(16)}"
+        return tx_hash
+      else
+        puts "❌ Transaction failed"
+        return nil
+      end
+    end
+
+    # Update claimed status on backend
+    def update_claimed_status(epoch_id, claimed, tx_hash = nil)
+      begin
+        response = HTTParty.post(
+          "#{@backend_url}/rewards/update_claimed",
+          body: {
+            node: @signer.address,
+            epoch_id: epoch_id,
+            claimed: claimed,
+            tx_hash: tx_hash
+          }.to_json,
+          headers: { 'Content-Type' => 'application/json' }
+        )
+
+        if response.success?
+          puts "✅ Backend status updated"
+        else
+          puts "⚠️  Failed to update backend status: #{response.code}"
+        end
+      rescue => e
+        puts "⚠️  Error updating backend status: #{e.message}"
       end
     end
 
@@ -210,19 +295,38 @@ module VPNNode
         proof_data['amount'].to_i > 0
     end
 
-    # Encode claimReward(uint256,uint256,bytes32[]) function call
-    def encode_claim_reward_call(epoch, amount, proof)
-      # Function selector: keccak256("claimReward(uint256,uint256,bytes32[])")[0:4]
-      function_sig = "claimReward(uint256,uint256,bytes32[])"
-      hash = Keccak::Digest.new(:sha3_256).update(function_sig).hexdigest
-      selector = "0x" + hash[0..7]
+    # Function selector for claimReward(uint256,uint256,bytes32[])
+    def calculate_claim_reward_selector
+      "91e3ca0b" # keccak256("claimReward(uint256,uint256,bytes32[])")
+    end
 
-      # Encode parameters
+    # Encode parameters for claimReward(uint256 epoch, uint256 amount, bytes32[] proof)
+    def encode_claim_reward_params(epoch, amount, proof_array)
+      # ABI encoding for: (uint256 epoch, uint256 amount, bytes32[] proof)
+      # Offset 0: epoch (uint256)
+      # Offset 32: amount (uint256)
+      # Offset 64: offset to proof array (uint256) = 96 (0x60)
+      # Offset 96: proof array length (uint256)
+      # Offset 128+: proof array elements (bytes32[])
+
       encoded_epoch = encode_uint256(epoch)
       encoded_amount = encode_uint256(amount)
-      encoded_proof = encode_bytes32_array(proof)
+      proof_offset = encode_uint256(96) # Offset to dynamic array
+      proof_length = encode_uint256(proof_array.length)
 
-      "#{selector}#{encoded_epoch}#{encoded_amount}#{encoded_proof}"
+      # Encode each proof element
+      encoded_proof_elements = proof_array.map do |proof_hex|
+        encode_bytes32(proof_hex)
+      end.join
+
+      "#{encoded_epoch}#{encoded_amount}#{proof_offset}#{proof_length}#{encoded_proof_elements}"
+    end
+
+    # Legacy method for compatibility
+    def encode_claim_reward_call(epoch, amount, proof)
+      function_selector = "0x" + calculate_claim_reward_selector
+      encoded_params = encode_claim_reward_params(epoch, amount, proof)
+      "#{function_selector}#{encoded_params}"
     end
 
     # Encode claimed(uint256,address) function call
@@ -335,6 +439,16 @@ module VPNNode
 
       puts "\n⚠️  Transaction receipt not found after #{max_wait}s"
       nil
+    end
+
+    def encode_uint256(value)
+      value.to_i.to_s(16).rjust(64, '0')
+    end
+
+    def encode_bytes32(value)
+      val = value.to_s
+      val = val[2..-1] if val.start_with?('0x')
+      val.rjust(64, '0')
     end
   end
 end
