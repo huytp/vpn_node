@@ -74,29 +74,6 @@ module VPNNode
       result['result']
     end
 
-    private
-
-    def enforce_rate_limit
-      @@rate_limiter_mutex.synchronize do
-        if @@last_request_time
-          time_since_last_request = Time.now - @@last_request_time
-          if time_since_last_request < MIN_INTERVAL_BETWEEN_REQUESTS
-            sleep_time = MIN_INTERVAL_BETWEEN_REQUESTS - time_since_last_request
-            sleep(sleep_time) if sleep_time > 0
-          end
-        end
-        @@last_request_time = Time.now
-      end
-    end
-
-    def calculate_retry_delay(retry_count)
-      # Exponential backoff: 1s, 2s, 4s, 8s, 16s, capped at MAX_RETRY_DELAY
-      delay = INITIAL_RETRY_DELAY * (2 ** retry_count)
-      delay = [delay, MAX_RETRY_DELAY].min
-      # Add small random jitter to avoid thundering herd
-      delay + (rand * 0.5)
-    end
-
     # Convenience methods for common RPC calls
     def eth_block_number
       call('eth_blockNumber')
@@ -136,6 +113,29 @@ module VPNNode
 
     def int_to_hex(int)
       "0x#{int.to_s(16)}"
+    end
+
+    private
+
+    def enforce_rate_limit
+      @@rate_limiter_mutex.synchronize do
+        if @@last_request_time
+          time_since_last_request = Time.now - @@last_request_time
+          if time_since_last_request < MIN_INTERVAL_BETWEEN_REQUESTS
+            sleep_time = MIN_INTERVAL_BETWEEN_REQUESTS - time_since_last_request
+            sleep(sleep_time) if sleep_time > 0
+          end
+        end
+        @@last_request_time = Time.now
+      end
+    end
+
+    def calculate_retry_delay(retry_count)
+      # Exponential backoff: 1s, 2s, 4s, 8s, 16s, capped at MAX_RETRY_DELAY
+      delay = INITIAL_RETRY_DELAY * (2 ** retry_count)
+      delay = [delay, MAX_RETRY_DELAY].min
+      # Add small random jitter to avoid thundering herd
+      delay + (rand * 0.5)
     end
   end
 end
