@@ -9,7 +9,7 @@ require_relative 'heartbeat'
 require_relative 'traffic_meter'
 require_relative 'wireguard'
 require_relative 'rpc_client'
-require_relative 'reward_claimer'
+# require_relative 'reward_claimer' # Moved to backend
 require_relative 'reward_verifier'
 require_relative 'agent'
 

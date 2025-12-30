@@ -1,7 +1,7 @@
 require 'httparty'
 require 'json'
 require 'eth'
-require 'digest'
+require 'keccak'
 require_relative 'rpc_client'
 
 module VPNNode
@@ -213,9 +213,9 @@ module VPNNode
     # Encode claimReward(uint256,uint256,bytes32[]) function call
     def encode_claim_reward_call(epoch, amount, proof)
       # Function selector: keccak256("claimReward(uint256,uint256,bytes32[])")[0:4]
-      # Using keccak256 from eth gem
       function_sig = "claimReward(uint256,uint256,bytes32[])"
-      selector = "0x" + Digest::SHA3.hexdigest(function_sig, 256)[0..7]
+      hash = Keccak::Digest.new(:sha3_256).update(function_sig).hexdigest
+      selector = "0x" + hash[0..7]
 
       # Encode parameters
       encoded_epoch = encode_uint256(epoch)
@@ -229,7 +229,8 @@ module VPNNode
     def encode_claimed_call(epoch, address)
       # Function selector: keccak256("claimed(uint256,address)")[0:4]
       function_sig = "claimed(uint256,address)"
-      selector = "0x" + Digest::SHA3.hexdigest(function_sig, 256)[0..7]
+      hash = Keccak::Digest.new(:sha3_256).update(function_sig).hexdigest
+      selector = "0x" + hash[0..7]
 
       encoded_epoch = encode_uint256(epoch)
       encoded_address = encode_address(address)

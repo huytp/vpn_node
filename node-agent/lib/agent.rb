@@ -4,7 +4,7 @@ require_relative 'heartbeat'
 require_relative 'traffic_meter'
 require_relative 'traffic_sender'
 require_relative 'wireguard'
-require_relative 'reward_claimer'
+# require_relative 'reward_claimer' # Moved to backend
 require_relative 'api_server'
 require 'thread'
 
@@ -26,20 +26,9 @@ module VPNNode
       @heartbeat_sender = HeartbeatSender.new(@signer, @config.backend_url, @config)
       @wg_previous_stats = {} # Lưu stats trước đó để tính delta
 
-      # Initialize reward claimer if blockchain config available
-      if ENV['RPC_URL'] && ENV['REWARD_CONTRACT_ADDRESS']
-        @reward_claimer = RewardClaimer.new(
-          @signer,
-          @config.backend_url,
-          ENV['RPC_URL'],
-          ENV['REWARD_CONTRACT_ADDRESS'],
-          ENV['CONTRACT_ABI_PATH'],
-          ENV['TATUM_API_KEY']
-        )
-      else
-        @reward_claimer = nil
-        puts "⚠️  Reward claimer disabled (missing RPC_URL or REWARD_CONTRACT_ADDRESS)"
-      end
+      # Reward claiming is now handled by backend (SettlementService)
+      # No longer needed in vpn-node
+      @reward_claimer = nil
 
       @running = false
       @threads = []
@@ -64,10 +53,7 @@ module VPNNode
       @threads << Thread.new { traffic_report_loop }
 
       # Start reward claiming thread (if enabled)
-      puts "Reward claimer: #{@reward_claimer}"
-      if @reward_claimer
-        @threads << Thread.new { reward_claim_loop }
-      end
+      # Reward claiming moved to backend (SettlementService)
 
       # Handle signals
       Signal.trap('INT') { stop }
@@ -429,43 +415,7 @@ module VPNNode
       end
     end
 
-    def reward_claim_loop
-      return unless @reward_claimer
-
-      # Wait a bit before first check
-      sleep 60
-      puts "Reward claim loop started"
-
-      loop do
-        break unless @running
-
-        # Check for available rewards every 5 minutes
-        sleep 120
-
-        if @running
-          begin
-            puts "Checking for pending rewards"
-            pending_rewards = @reward_claimer.get_pending_rewards
-            puts "Pending rewards: #{pending_rewards}"
-            if pending_rewards.any?
-              puts "💰 Found #{pending_rewards.length} pending reward(s)"
-
-              pending_rewards.each do |reward|
-                puts "  - Epoch #{reward[:epoch]}: #{reward[:amount]} DEVPN"
-                @reward_claimer.claim_reward(reward[:epoch])
-                sleep 10 # Wait between claims
-              end
-            end
-          rescue => e
-            puts "Reward claim loop error: #{e.message}"
-            puts e.backtrace.first(3)
-          end
-        end
-      end
-    rescue => e
-      puts "Reward claim loop error: #{e.message}"
-      puts e.backtrace
-    end
+    # Reward claiming moved to backend (SettlementService.commit_to_blockchain)
 
     def stop
       puts "\nShutting down node agent..."
