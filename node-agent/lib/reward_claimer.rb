@@ -77,10 +77,22 @@ module VPNNode
       # 4. Build transaction data
       amount = proof_data['amount'].to_i
       proof = proof_data['proof'].map { |p| p.start_with?('0x') ? p : "0x#{p}" }
+      merkle_root = proof_data['merkle_root']
 
       puts "   📋 Proof data:"
       puts "      Amount: #{amount}"
       puts "      Proof length: #{proof.length}"
+      puts "      Merkle root: #{merkle_root}"
+
+      # Verify proof locally before sending transaction
+      if merkle_root && !proof.empty?
+        if verify_proof_locally(amount, proof, merkle_root)
+          puts "   ✅ Local proof verification passed"
+        else
+          puts "   ⚠️  Local proof verification failed - proof may be invalid"
+          puts "      Will still attempt on-chain (contract will reject if invalid)"
+        end
+      end
 
       # 5. Claim on blockchain
       begin
@@ -394,14 +406,13 @@ module VPNNode
         return false
       end
 
-      # Check proof is not empty (critical for Merkle verification)
+      # Check proof - empty proof is valid if there's only 1 node in the epoch
+      # (in that case, root == leaf, so no proof needed)
       if proof_data['proof'].empty?
-        puts "   ❌ Proof array is empty! Cannot verify Merkle proof."
-        puts "      This usually means:"
-        puts "      - Epoch not committed to blockchain yet"
-        puts "      - Node has no reward for this epoch"
-        puts "      - Merkle tree not built correctly"
-        return false
+        puts "   ⚠️  Proof array is empty"
+        puts "      This is valid if epoch has only 1 node (root == leaf)"
+        puts "      Will attempt claim with empty proof array"
+        # Don't reject - allow empty proof for single-node epochs
       end
 
       # Check amount is positive
@@ -567,6 +578,58 @@ module VPNNode
       val = value.to_s
       val = val[2..-1] if val.start_with?('0x')
       val.rjust(64, '0')
+    end
+
+    # Verify Merkle proof locally (matches contract logic)
+    def verify_proof_locally(amount, proof_array, merkle_root)
+      begin
+        # Calculate leaf hash (same as contract: keccak256(abi.encodePacked(recipient, amount)))
+        address_hex = @signer.address.to_s
+        address_hex = address_hex[2..-1] if address_hex.start_with?('0x')
+        address_bytes = [address_hex].pack('H*')
+
+        amount_hex = amount.to_s(16).rjust(64, '0')
+        amount_bytes = [amount_hex].pack('H*')
+
+        packed = address_bytes + amount_bytes
+        leaf = Digest::Keccak.hexdigest(packed, 256)
+
+        # Verify proof (matches contract logic)
+        computed_hash = leaf
+        proof_array.each do |proof_element|
+          proof_hex = proof_element.to_s
+          proof_hex = proof_hex[2..-1] if proof_hex.start_with?('0x')
+
+          # Contract logic: if (computedHash < proof[i]) then left first, else right first
+          if computed_hash < proof_hex
+            # hash(computedHash, proof[i])
+            left_bytes = [computed_hash].pack('H*')
+            right_bytes = [proof_hex].pack('H*')
+            packed = left_bytes + right_bytes
+          else
+            # hash(proof[i], computedHash)
+            left_bytes = [proof_hex].pack('H*')
+            right_bytes = [computed_hash].pack('H*')
+            packed = left_bytes + right_bytes
+          end
+
+          computed_hash = Digest::Keccak.hexdigest(packed, 256)
+        end
+
+        # Compare with root
+        root_hex = merkle_root.to_s
+        root_hex = root_hex[2..-1] if root_hex.start_with?('0x')
+
+        result = computed_hash.downcase == root_hex.downcase
+        unless result
+          puts "      Computed: #{computed_hash}"
+          puts "      Expected: #{root_hex}"
+        end
+        result
+      rescue => e
+        puts "      ⚠️  Error verifying proof locally: #{e.message}"
+        false
+      end
     end
   end
 end
