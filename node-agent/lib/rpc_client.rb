@@ -79,6 +79,10 @@ module VPNNode
       call('eth_blockNumber')
     end
 
+    def eth_get_balance(address, block = 'latest')
+      call('eth_getBalance', [address, block])
+    end
+
     def eth_get_transaction_count(address, block = 'latest')
       call('eth_getTransactionCount', [address, block])
     end

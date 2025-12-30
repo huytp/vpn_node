@@ -139,7 +139,23 @@ module VPNNode
         gas_limit = DEFAULT_GAS_LIMIT
       end
 
-      puts "⛽ Gas: price=#{gas_price}, limit=#{gas_limit}"
+      # Check balance before attempting transaction
+      balance_hex = @rpc.eth_get_balance(@key.address.to_s, 'latest')
+      balance_wei = @rpc.hex_to_int(balance_hex)
+      estimated_gas_cost = gas_price * gas_limit
+      balance_matic = balance_wei / 1_000_000_000_000_000_000.0 # Convert wei to MATIC
+      estimated_cost_matic = estimated_gas_cost / 1_000_000_000_000_000_000.0
+
+      puts "💰 Balance: #{balance_matic.round(6)} MATIC"
+      puts "⛽ Gas: price=#{gas_price}, limit=#{gas_limit}, estimated_cost=#{estimated_cost_matic.round(6)} MATIC"
+
+      if balance_wei < estimated_gas_cost
+        error_msg = "❌ Insufficient funds! Need #{estimated_cost_matic.round(6)} MATIC for gas, but only have #{balance_matic.round(6)} MATIC"
+        puts error_msg
+        puts "💡 Please fund your wallet at: #{@key.address.to_s}"
+        puts "   Polygon Amoy Faucet: https://faucet.polygon.technology/"
+        raise error_msg
+      end
 
       # Build transaction
       transaction = Eth::Tx.new(
@@ -157,8 +173,22 @@ module VPNNode
       signed_tx = "0x#{signed_tx}" unless signed_tx.start_with?('0x')
 
       # Send transaction
-      tx_hash = @rpc.eth_send_raw_transaction(signed_tx)
-      puts "📤 Transaction sent: #{tx_hash}"
+      begin
+        tx_hash = @rpc.eth_send_raw_transaction(signed_tx)
+        puts "📤 Transaction sent: #{tx_hash}"
+      rescue => e
+        if e.message.include?('insufficient funds')
+          error_msg = "❌ Insufficient funds to send transaction!"
+          puts error_msg
+          puts "💰 Current balance: #{balance_matic.round(6)} MATIC"
+          puts "⛽ Required: #{estimated_cost_matic.round(6)} MATIC"
+          puts "💡 Please fund your wallet at: #{@key.address.to_s}"
+          puts "   Polygon Amoy Faucet: https://faucet.polygon.technology/"
+          raise error_msg
+        else
+          raise
+        end
+      end
 
       # Wait for receipt
       receipt = wait_for_receipt(tx_hash, 60)
