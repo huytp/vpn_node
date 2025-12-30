@@ -1,7 +1,7 @@
 require 'httparty'
 require 'json'
 require 'eth'
-require 'keccak'
+require 'digest/keccak'
 require_relative 'rpc_client'
 
 module VPNNode
@@ -333,7 +333,7 @@ module VPNNode
     def encode_claimed_call(epoch, address)
       # Function selector: keccak256("claimed(uint256,address)")[0:4]
       function_sig = "claimed(uint256,address)"
-      hash = Keccak::Digest.new(:sha3_256).update(function_sig).hexdigest
+      hash = Digest::Keccak.hexdigest(function_sig, 256)
       selector = "0x" + hash[0..7]
 
       encoded_epoch = encode_uint256(epoch)
