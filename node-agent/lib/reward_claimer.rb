@@ -381,6 +381,39 @@ module VPNNode
       nil
     end
 
+    def check_epoch_status(epoch, backend_root)
+      begin
+        # Check if epoch is committed on blockchain
+        epoch_root_data = encode_epoch_root_call(epoch)
+        onchain_root_hex = @rpc.eth_call(@contract_address, epoch_root_data)
+
+        if onchain_root_hex.nil? || onchain_root_hex == '0x' || onchain_root_hex.to_i(16) == 0
+          return { valid: false, reason: "Epoch #{epoch} not committed on blockchain" }
+        end
+
+        # Compare roots
+        onchain_root = onchain_root_hex.to_s
+        onchain_root = onchain_root[2..-1] if onchain_root.start_with?('0x')
+        backend_root_hex = backend_root.to_s
+        backend_root_hex = backend_root_hex[2..-1] if backend_root_hex.start_with?('0x')
+
+        if onchain_root.downcase != backend_root_hex.downcase
+          puts "   ⚠️  Merkle root mismatch!"
+          puts "      On-chain:  #{onchain_root}"
+          puts "      Backend:   #{backend_root_hex}"
+          return { valid: false, reason: "Merkle root mismatch between blockchain and backend" }
+        end
+
+        puts "   ✅ Epoch #{epoch} is committed on blockchain"
+        puts "   ✅ Merkle root matches: #{onchain_root[0..15]}..."
+        { valid: true }
+      rescue => e
+        puts "   ⚠️  Could not check epoch status: #{e.message}"
+        puts "      Will attempt claim - transaction will revert if epoch not committed"
+        { valid: true } # Allow attempt, let contract reject if invalid
+      end
+    end
+
     def already_claimed?(epoch)
       begin
         # Encode function call for claimed(uint256,address)
@@ -492,8 +525,8 @@ module VPNNode
       "#{selector}#{encoded_epoch}"
     end
 
-    # Encode epochRoots(uint256) function call to get merkle root
-    def encode_epoch_root_call(epoch)
+    # Encode claimed(uint256,address) function call
+    def encode_claimed_call(epoch, address)
       # Function selector: keccak256("epochRoots(uint256)")[0:4]
       function_sig = "epochRoots(uint256)"
       hash = Digest::Keccak.hexdigest(function_sig, 256)
