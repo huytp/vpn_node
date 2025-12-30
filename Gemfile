@@ -3,6 +3,7 @@ source 'https://rubygems.org'
 ruby '>= 3.2.0'
 
 gem 'eth', '~> 0.5.0'
+gem 'keccak', '~> 1.3'
 gem 'httparty', '~> 0.21.0'
 gem 'sys-proctable', '~> 1.2.0'
 gem 'dotenv', '~> 2.8.0'
