@@ -232,16 +232,6 @@ module VPNNode
 
       begin
         config_content = File.read(config_path)
-        puts "   📄 Reading WireGuard config from: #{config_path}"
-        puts "   📄 Config file size: #{config_content.length} bytes"
-
-        # Debug: Hiển thị một phần config để kiểm tra format
-        lines = config_content.lines
-        puts "   📄 First 20 lines of config:"
-        lines.first(20).each_with_index do |line, idx|
-          puts "      #{idx + 1}: #{line.chomp}"
-        end
-
         current_connection_id = nil
         in_peer_section = false
 
@@ -271,7 +261,6 @@ module VPNNode
             parts = line_stripped.split(':')
             if parts.length >= 2
               current_connection_id = parts[1..-1].join(':').strip
-              puts "   🔍 Found connection_id: #{current_connection_id} in config"
             end
           # Tìm PublicKey trong [Peer] section
           elsif line_stripped.start_with?('PublicKey') && line_stripped.include?('=')
@@ -280,18 +269,15 @@ module VPNNode
               public_key = parts[1].strip
               if current_connection_id
                 map[public_key] = current_connection_id
-                puts "   ✅ Mapped peer #{public_key[0..8]}... → connection #{current_connection_id[0..8]}..."
-              else
-                puts "   ⚠️  Warning: Found PublicKey #{public_key[0..8]}... but no connection_id in [Peer] section"
               end
             end
           end
         end
 
-        puts "   📊 Total peer mappings: #{map.length}"
-        map.each do |peer, conn|
-          puts "      - #{peer[0..12]}... → #{conn[0..12]}..."
-        end if map.any?
+        # Chỉ log nếu có mappings hoặc có vấn đề
+        if map.any?
+          puts "   📊 Found #{map.length} peer-to-connection mapping(s) in WireGuard config"
+        end
       rescue => e
         puts "   ❌ Error parsing WireGuard config: #{e.message}"
         puts e.backtrace.first(3)
@@ -342,14 +328,16 @@ module VPNNode
                 connection_id = active_connections.first['connection_id']
                 puts "   ⚠️  Warning: No mapping for peer #{peer_public_key[0..8]}..., assigning to single connection #{connection_id[0..8]}..."
               else
-                puts "   ⚠️  Warning: No connection_id found for peer #{peer_public_key[0..8]}... (skipping)"
+                # Chỉ log lần đầu để tránh spam
+                if unmapped_peers.length == 1
+                  puts "   ⚠️  Warning: Peer #{peer_public_key[0..8]}... not found in WireGuard config (no connection_id mapping)"
+                end
                 next
               end
             end
 
             # Chỉ xử lý nếu connection đang active
             unless active_connections.any? { |conn| conn['connection_id'] == connection_id }
-              puts "   ⚠️  Warning: Connection #{connection_id[0..8]}... not in active connections list"
               next
             end
 
@@ -379,7 +367,16 @@ module VPNNode
           connection_traffic.each do |connection_id, traffic|
             if traffic[:bytes_in] > 0 || traffic[:bytes_out] > 0
               @traffic_meter.update_session(connection_id, traffic[:bytes_in], traffic[:bytes_out])
+              mb_in = traffic[:bytes_in] / (1024.0 * 1024.0)
+              mb_out = traffic[:bytes_out] / (1024.0 * 1024.0)
+              puts "   📈 Updated session #{connection_id[0..8]}...: +#{mb_in.round(2)}MB in, +#{mb_out.round(2)}MB out"
             end
+          end
+
+          # Log nếu có connections không có traffic (không có peer trong WireGuard)
+          connections_without_peers = active_connections.map { |c| c['connection_id'] } - connection_traffic.keys
+          if connections_without_peers.any?
+            puts "   ℹ️  #{connections_without_peers.length} connection(s) have no peer in WireGuard config (no traffic): #{connections_without_peers.map { |c| c[0..8] + '...' }.join(', ')}"
           end
         end
 
