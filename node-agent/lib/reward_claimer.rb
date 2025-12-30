@@ -68,6 +68,10 @@ module VPNNode
       amount = proof_data['amount'].to_i
       proof = proof_data['proof'].map { |p| p.start_with?('0x') ? p : "0x#{p}" }
 
+      puts "   📋 Proof data:"
+      puts "      Amount: #{amount}"
+      puts "      Proof length: #{proof.length}"
+
       # 5. Claim on blockchain
       begin
         tx_hash = claim_on_blockchain(epoch, amount, proof)
@@ -105,8 +109,10 @@ module VPNNode
 
       puts "📝 Building claim transaction..."
       puts "   Contract: #{@contract_address}"
+      puts "   Node: #{@signer.address}"
       puts "   Epoch: #{epoch_id}"
       puts "   Amount: #{amount}"
+      puts "   Proof elements: #{proof_array.length}"
 
       # Function selector for claimReward(uint256,uint256,bytes32[])
       function_selector = "0x" + calculate_claim_reward_selector
@@ -197,7 +203,37 @@ module VPNNode
         puts "   Block: #{receipt['blockNumber']}, Gas used: #{receipt['gasUsed'].to_i(16)}"
         return tx_hash
       else
-        puts "❌ Transaction failed"
+        puts "❌ Transaction failed on blockchain"
+        puts "   Transaction hash: #{tx_hash}"
+        puts "   🔗 View on explorer: https://amoy.polygonscan.com/tx/#{tx_hash}"
+
+        if receipt
+          status = receipt['status']
+          status_int = status.to_i(16) if status
+          puts "   Status: #{status} (#{status_int == 0 ? 'Failed/Reverted' : 'Unknown'})"
+
+          # Try to get transaction details
+          begin
+            tx_details = @rpc.eth_get_transaction_by_hash(tx_hash)
+            if tx_details
+              puts "   Gas limit: #{@rpc.hex_to_int(tx_details['gas'])}"
+              puts "   Gas price: #{@rpc.hex_to_int(tx_details['gasPrice'])}"
+            end
+          rescue => e
+            # Ignore errors when getting transaction details
+          end
+
+          # Common reasons for failure
+          puts "\n   💡 Possible reasons:"
+          puts "      - Reward already claimed for this epoch"
+          puts "      - Invalid Merkle proof"
+          puts "      - Contract validation failed"
+          puts "      - Check transaction details on Polygonscan for revert reason"
+        else
+          puts "   ⚠️  Could not get transaction receipt"
+          puts "      Transaction may still be pending or failed to be included"
+        end
+
         return nil
       end
     end
@@ -310,9 +346,16 @@ module VPNNode
         result = @rpc.eth_call(@contract_address, function_data)
 
         # Result is a hex boolean: 0x0000...0000 (false) or 0x0000...0001 (true)
-        result.to_i(16) > 0
+        claimed = result.to_i(16) > 0
+        if claimed
+          puts "   ℹ️  Checked on-chain: reward already claimed for epoch #{epoch}"
+        end
+        claimed
       rescue => e
-        puts "⚠️  Could not check if already claimed: #{e.message}"
+        # If eth_call fails, it might be because the function doesn't exist or other issues
+        # We'll proceed with the claim attempt and let the transaction fail if already claimed
+        puts "   ⚠️  Could not check if already claimed on-chain: #{e.message}"
+        puts "      Will attempt claim - transaction will revert if already claimed"
         false
       end
     end

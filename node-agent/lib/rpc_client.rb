@@ -107,6 +107,10 @@ module VPNNode
       call('eth_getTransactionReceipt', [tx_hash])
     end
 
+    def eth_get_transaction_by_hash(tx_hash)
+      call('eth_getTransactionByHash', [tx_hash])
+    end
+
     def eth_chain_id
       call('eth_chainId')
     end
