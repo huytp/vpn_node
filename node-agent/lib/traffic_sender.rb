@@ -44,6 +44,12 @@ module VPNNode
       begin
         record = @traffic_meter.create_traffic_record(session_id, epoch_id)
 
+        # Bỏ qua nếu traffic_mb = 0
+        if record[:traffic_mb].to_f == 0.0
+          puts "⏭️  Skipping traffic record with 0 MB for session: #{session_id}"
+          return nil
+        end
+
         response = HTTParty.post(
           "#{@backend_url}/nodes/traffic",
           body: {
@@ -64,9 +70,13 @@ module VPNNode
           data = JSON.parse(response.body)
           puts "✅ Traffic record sent successfully"
           puts "   ID: #{data['id']}"
-          puts "   Traffic: #{data['traffic_mb']} MB"
+          puts "   Traffic: #{data['traffic_mb']} MB (delta)"
           puts "   Reward eligible: #{data['reward_eligible']}"
           puts "   AI scored: #{data['ai_scored']}"
+
+          # Đánh dấu traffic đã gửi để tránh trùng lặp
+          @traffic_meter.mark_traffic_sent(session_id)
+
           return data
         else
           puts "❌ Failed to send traffic record: #{response.code} - #{response.body}"
@@ -82,10 +92,18 @@ module VPNNode
     # Gửi nhiều traffic records cùng lúc
     def send_traffic_records_batch(session_ids, epoch_id = nil)
       records = []
+      skipped_count = 0
 
       session_ids.each do |session_id|
         begin
           record = @traffic_meter.create_traffic_record(session_id, epoch_id)
+
+          # Bỏ qua nếu traffic_mb = 0
+          if record[:traffic_mb].to_f == 0.0
+            skipped_count += 1
+            next
+          end
+
           records << {
             node: @signer.address,
             session_id: record[:session_id],
@@ -97,6 +115,10 @@ module VPNNode
         rescue => e
           puts "Error creating traffic record for session #{session_id}: #{e.message}"
         end
+      end
+
+      if skipped_count > 0
+        puts "⏭️  Skipped #{skipped_count} traffic record(s) with 0 MB"
       end
 
       return nil if records.empty?
@@ -118,6 +140,25 @@ module VPNNode
           data = JSON.parse(response.body)
           puts "✅ Sent #{data['created']} traffic record(s) successfully"
           puts "   Failed: #{data['failed']}" if data['failed'] > 0
+
+          # Đánh dấu traffic đã gửi cho tất cả session đã gửi thành công
+          # Nếu có results, chỉ mark các session thành công
+          # Nếu không có results nhưng created > 0, mark tất cả
+          if data['results'] && data['results'].is_a?(Array)
+            data['results'].each do |result|
+              session_id = result['session_id'] || result[:session_id]
+              if session_id
+                @traffic_meter.mark_traffic_sent(session_id)
+              end
+            end
+          elsif data['created'] && data['created'] > 0
+            # Nếu không có results nhưng có created, mark tất cả session trong records
+            records.each do |record|
+              session_id = record[:session_id]
+              @traffic_meter.mark_traffic_sent(session_id) if session_id
+            end
+          end
+
           return data
         else
           puts "❌ Failed to send traffic records batch: #{response.code} - #{response.body}"

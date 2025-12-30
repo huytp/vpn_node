@@ -189,7 +189,7 @@ module VPNNode
       loop do
         break unless @running
 
-        sleep 10
+        sleep 30
 
         if @running
           begin

@@ -5,7 +5,7 @@ require_relative 'signer'
 module VPNNode
   class TrafficMeter
     class Session
-      attr_accessor :id, :start_time, :bytes_in, :bytes_out, :last_update
+      attr_accessor :id, :start_time, :bytes_in, :bytes_out, :last_update, :last_sent_bytes
 
       def initialize(id)
         @id = id
@@ -13,6 +13,7 @@ module VPNNode
         @bytes_in = 0
         @bytes_out = 0
         @last_update = Time.now
+        @last_sent_bytes = 0  # Track traffic đã gửi để tính delta
       end
 
       def total_bytes
@@ -21,6 +22,20 @@ module VPNNode
 
       def total_mb
         total_bytes / (1024.0 * 1024.0)
+      end
+
+      # Tính delta (chênh lệch) từ lần gửi trước
+      def delta_bytes
+        total_bytes - @last_sent_bytes
+      end
+
+      def delta_mb
+        delta_bytes / (1024.0 * 1024.0)
+      end
+
+      # Đánh dấu đã gửi traffic hiện tại
+      def mark_as_sent
+        @last_sent_bytes = total_bytes
       end
     end
 
@@ -80,10 +95,13 @@ module VPNNode
         session = @sessions[session_id]
         raise "Session not found: #{session_id}" unless session
 
+        # Chỉ gửi delta (chênh lệch) từ lần gửi trước để tránh trùng lặp
+        delta_mb = session.delta_mb
+
         record = {
           node: @signer.address,
           session_id: session_id,
-          traffic_mb: session.total_mb,
+          traffic_mb: delta_mb,  # Gửi delta thay vì total
           epoch_id: epoch_id,
           timestamp: Time.now.to_i
         }
@@ -92,6 +110,15 @@ module VPNNode
         record[:signature] = signature
 
         record
+      end
+    end
+
+    # Đánh dấu traffic đã được gửi thành công (sau khi gửi lên backend)
+    def mark_traffic_sent(session_id)
+      @mutex.synchronize do
+        session = @sessions[session_id]
+        return unless session
+        session.mark_as_sent
       end
     end
   end
