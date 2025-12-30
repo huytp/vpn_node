@@ -201,7 +201,8 @@ module VPNNode
 
             if active_sessions.any?
               total_traffic = @traffic_meter.get_total_traffic
-              puts "📊 Total traffic: %.2f MB (#{active_sessions.length} active session(s))" % total_traffic
+              puts "📊 Total traffic tích lũy: %.2f MB (#{active_sessions.length} active session(s))" % total_traffic
+              puts "   (Chỉ gửi delta - chênh lệch từ lần gửi trước)"
 
               # Lấy current epoch_id từ backend
               current_epoch_id = @traffic_sender.get_current_epoch_id
@@ -222,6 +223,35 @@ module VPNNode
       puts e.backtrace
     end
 
+    # Map peer public key với connection_id từ WireGuard config
+    def get_peer_to_connection_map
+      map = {}
+      config_path = @config.wg_config_path
+
+      return map unless File.exist?(config_path)
+
+      config_content = File.read(config_path)
+      current_connection_id = nil
+
+      config_content.each_line do |line|
+        # Tìm comment chứa connection_id
+        if line.strip.start_with?('# Connection:')
+          current_connection_id = line.strip.split(':').last.strip
+        # Tìm PublicKey trong [Peer] section
+        elsif line.strip.start_with?('PublicKey =')
+          public_key = line.strip.split('=').last.strip
+          if current_connection_id
+            map[public_key] = current_connection_id
+          end
+        # Reset khi gặp [Peer] mới
+        elsif line.strip == '[Peer]'
+          current_connection_id = nil
+        end
+      end
+
+      map
+    end
+
     # Đồng bộ VPN connections từ backend với TrafficMeter sessions
     def sync_wireguard_sessions
       begin
@@ -230,6 +260,9 @@ module VPNNode
 
         # Lấy stats từ WireGuard interface
         wg_stats = WireGuard.get_stats(@config.wg_interface)
+
+        # Map peer public key với connection_id
+        peer_to_connection = get_peer_to_connection_map
 
         # Lấy active sessions hiện tại
         current_sessions = @traffic_meter.get_active_sessions
@@ -242,39 +275,53 @@ module VPNNode
             @traffic_meter.start_session(connection_id)
             puts "➕ Started tracking session: #{connection_id} (user: #{connection['user_address']})"
           end
+        end
 
-          # Cập nhật traffic từ WireGuard nếu có
-          if wg_stats.any?
-            # Tính tổng traffic từ tất cả peers (vì có thể có nhiều peers cho một connection)
-            total_bytes_in = 0
-            total_bytes_out = 0
+        # Cập nhật traffic từ WireGuard cho từng connection tương ứng với peer
+        if wg_stats.any?
+          # Group traffic theo connection_id
+          connection_traffic = {}
 
-            wg_stats.each do |peer_public_key, stats|
-              # Lấy previous stats để tính delta
-              prev_stats = @wg_previous_stats[peer_public_key] || { bytes_received: 0, bytes_sent: 0 }
+          wg_stats.each do |peer_public_key, stats|
+            connection_id = peer_to_connection[peer_public_key]
 
-              bytes_received = stats[:bytes_received] || 0
-              bytes_sent = stats[:bytes_sent] || 0
-
-              # Tính delta (chênh lệch so với lần trước)
-              delta_bytes_in = [bytes_received - prev_stats[:bytes_received], 0].max
-              delta_bytes_out = [bytes_sent - prev_stats[:bytes_sent], 0].max
-
-              # Lưu stats hiện tại cho lần sau
-              @wg_previous_stats[peer_public_key] = {
-                bytes_received: bytes_received,
-                bytes_sent: bytes_sent
-              }
-
-              total_bytes_in += delta_bytes_in
-              total_bytes_out += delta_bytes_out
+            # Nếu không tìm thấy mapping, bỏ qua peer này
+            unless connection_id
+              puts "⚠️  Warning: No connection_id found for peer #{peer_public_key[0..8]}..."
+              next
             end
 
-            # Cập nhật traffic cho session (chia đều cho tất cả connections)
-            if total_bytes_in > 0 || total_bytes_out > 0
-              bytes_per_connection = total_bytes_in / active_connections.length
-              bytes_out_per_connection = total_bytes_out / active_connections.length
-              @traffic_meter.update_session(connection_id, bytes_per_connection, bytes_out_per_connection)
+            # Chỉ xử lý nếu connection đang active
+            unless active_connections.any? { |conn| conn['connection_id'] == connection_id }
+              next
+            end
+
+            # Lấy previous stats để tính delta
+            prev_stats = @wg_previous_stats[peer_public_key] || { bytes_received: 0, bytes_sent: 0 }
+
+            bytes_received = stats[:bytes_received] || 0
+            bytes_sent = stats[:bytes_sent] || 0
+
+            # Tính delta (chênh lệch so với lần trước)
+            delta_bytes_in = [bytes_received - prev_stats[:bytes_received], 0].max
+            delta_bytes_out = [bytes_sent - prev_stats[:bytes_sent], 0].max
+
+            # Lưu stats hiện tại cho lần sau
+            @wg_previous_stats[peer_public_key] = {
+              bytes_received: bytes_received,
+              bytes_sent: bytes_sent
+            }
+
+            # Tổng hợp traffic cho connection này (có thể có nhiều peers cho một connection)
+            connection_traffic[connection_id] ||= { bytes_in: 0, bytes_out: 0 }
+            connection_traffic[connection_id][:bytes_in] += delta_bytes_in
+            connection_traffic[connection_id][:bytes_out] += delta_bytes_out
+          end
+
+          # Cập nhật traffic cho từng connection (chỉ traffic của chính nó, không chia đều)
+          connection_traffic.each do |connection_id, traffic|
+            if traffic[:bytes_in] > 0 || traffic[:bytes_out] > 0
+              @traffic_meter.update_session(connection_id, traffic[:bytes_in], traffic[:bytes_out])
             end
           end
         end

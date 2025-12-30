@@ -97,11 +97,21 @@ module VPNNode
       session_ids.each do |session_id|
         begin
           record = @traffic_meter.create_traffic_record(session_id, epoch_id)
+          session_info = @traffic_meter.get_session_info(session_id)
 
-          # Bỏ qua nếu traffic_mb = 0
+          # Bỏ qua nếu delta traffic = 0 (đã gửi hết hoặc chưa có traffic mới)
           if record[:traffic_mb].to_f == 0.0
             skipped_count += 1
+            # Debug: Log chi tiết để hiểu tại sao skip
+            if session_info
+              puts "   ⏭️  Session #{session_id[0..8]}...: delta=0MB, total=#{session_info[:total_mb].round(2)}MB, last_sent=#{session_info[:last_sent_mb].round(2)}MB"
+            end
             next
+          end
+
+          # Log session được gửi
+          if session_info
+            puts "   ✅ Session #{session_id[0..8]}...: delta=#{record[:traffic_mb].round(2)}MB, total=#{session_info[:total_mb].round(2)}MB, last_sent=#{session_info[:last_sent_mb].round(2)}MB"
           end
 
           records << {
@@ -118,7 +128,7 @@ module VPNNode
       end
 
       if skipped_count > 0
-        puts "⏭️  Skipped #{skipped_count} traffic record(s) with 0 MB"
+        puts "⏭️  Skipped #{skipped_count} traffic record(s) with 0 MB delta (đã gửi hết hoặc chưa có traffic mới từ lần gửi trước)"
       end
 
       return nil if records.empty?

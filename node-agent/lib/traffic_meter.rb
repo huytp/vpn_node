@@ -84,6 +84,23 @@ module VPNNode
       end
     end
 
+    # Lấy thông tin chi tiết về session để debug
+    def get_session_info(session_id)
+      @mutex.synchronize do
+        session = @sessions[session_id]
+        return nil unless session
+
+        {
+          session_id: session_id,
+          total_mb: session.total_mb,
+          last_sent_mb: session.last_sent_bytes / (1024.0 * 1024.0),
+          delta_mb: session.delta_mb,
+          bytes_in: session.bytes_in,
+          bytes_out: session.bytes_out
+        }
+      end
+    end
+
     def get_active_sessions
       @mutex.synchronize do
         @sessions.keys.dup
