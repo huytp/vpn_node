@@ -5,6 +5,7 @@ require_relative 'traffic_meter'
 require_relative 'traffic_sender'
 require_relative 'wireguard'
 require_relative 'api_server'
+require_relative 'url_tracker'
 require 'thread'
 
 module VPNNode
@@ -23,6 +24,7 @@ module VPNNode
       @traffic_meter = TrafficMeter.new(@signer)
       @traffic_sender = TrafficSender.new(@signer, @config.backend_url, @traffic_meter)
       @heartbeat_sender = HeartbeatSender.new(@signer, @config.backend_url, @config)
+      @url_tracker = UrlTracker.new
       @wg_previous_stats = {} # Lưu stats trước đó để tính delta
 
       @running = false
@@ -46,6 +48,9 @@ module VPNNode
 
       # Start traffic reporting thread
       @threads << Thread.new { traffic_report_loop }
+
+      # Start URL tracking (monitor DNS queries)
+      @url_tracker.start_monitoring('wg0')
 
       # Handle signals
       Signal.trap('INT') { stop }
@@ -411,10 +416,18 @@ module VPNNode
       puts "\nShutting down node agent..."
       @running = false
 
+      # Stop URL tracking
+      @url_tracker.stop_monitoring
+
       # Give threads time to finish
       sleep 2
 
       @threads.each(&:kill)
+    end
+
+    # Expose URL tracker for API server
+    def url_tracker
+      @url_tracker
     end
   end
 end
