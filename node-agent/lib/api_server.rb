@@ -97,78 +97,7 @@ module VPNNode
       { status: 'ok', node_address: @signer.address }.to_json
     end
 
-    # GET /api/traffic/urls - Get recent URLs accessed through VPN
-    get '/api/traffic/urls' do
-      content_type :json
-
-      begin
-        connection_id = params['connection_id']
-        since_param = params['since'] # Unix timestamp
-        limit = (params['limit'] || 100).to_i
-
-        since = since_param ? Time.at(since_param.to_i) : nil
-
-        url_tracker = @agent.url_tracker
-        if url_tracker
-          urls = url_tracker.get_recent_urls(connection_id, since: since, limit: limit)
-          {
-            urls: urls.map { |u|
-              {
-                url: u[:url],
-                domain: extract_domain(u[:url]),
-                timestamp: u[:timestamp].to_i,
-                connection_id: u[:connection_id]
-              }
-            },
-            count: urls.length
-          }.to_json
-        else
-          status 503
-          { error: 'URL tracking not available' }.to_json
-        end
-      rescue => e
-        status 500
-        { error: e.message }.to_json
-      end
-    end
-
-    # GET /api/traffic/domains - Get unique domains accessed through VPN
-    get '/api/traffic/domains' do
-      content_type :json
-
-      begin
-        connection_id = params['connection_id']
-        since_param = params['since'] # Unix timestamp
-
-        since = since_param ? Time.at(since_param.to_i) : nil
-
-        url_tracker = @agent.url_tracker
-        if url_tracker
-          domains = url_tracker.get_unique_domains(connection_id, since: since)
-          {
-            domains: domains,
-            count: domains.length
-          }.to_json
-        else
-          status 503
-          { error: 'URL tracking not available' }.to_json
-        end
-      rescue => e
-        status 500
-        { error: e.message }.to_json
-      end
-    end
-
     private
-
-    def extract_domain(url)
-      # Extract domain from URL
-      url = url.gsub(/^https?:\/\//, '')
-      url = url.gsub(/^www\./, '')
-      url = url.split('/').first
-      url = url.split('?').first
-      url.split(':').first
-    end
 
     def get_wireguard_keys
       # Đọc từ WireGuard config file
